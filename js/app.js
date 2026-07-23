@@ -40,17 +40,21 @@
     return "Triple+";
   }
   function scoreOptionsForPar(par){
-    // raw strokes from par-2 to par+3, mapped to relative-to-par value + label
-    const opts = [];
-    for(let raw = par-2; raw <= par+3; raw++){
+    // raw strokes: siempre se incluye 1 (Ace/hoyo en uno) sin importar el par,
+    // más el rango normal par-2 a par+3, sin duplicar.
+    const raws = new Set([1]);
+    for(let raw = Math.max(1, par-2); raw <= par+3; raw++) raws.add(raw);
+    const sorted = Array.from(raws).sort((a,b)=>a-b);
+    return sorted.map(raw=>{
       const rel = raw - par;
-      opts.push({raw, rel, label: relLabel(rel)});
-    }
-    return opts;
+      const label = raw === 1 ? "Ace" : relLabel(rel);
+      return {raw, rel, label};
+    });
   }
 
   let state = {
-    screen: "setup",         // setup | pars | reveal | scoring | leaderboardBlock | finalBoard
+    screen: "setup",         // setup | pars | reveal | scoring | leaderboardBlock | finalBoard | scorecard
+    prevScreen: "leaderboardBlock", // a dónde regresar desde la tarjeta completa
     players: [],             // {id,name,total, holes:[{hole,block,score}]}
     pars: {},                // {holeNumber: 3|4}
     block: null,             // 'front' | 'back'
@@ -60,6 +64,7 @@
     holeScores: {},          // temp scores for current hole being entered {playerId: relative val}
     pendingEvent: null,      // {type, ...} triggers glitch overlay
     forcedPickCompanion: null,
+    fullLog: [],             // {block, hole, text} — persiste toda la ronda (Front 9 + Back 9)
     log: [],
     showLog: false,
     revealAnimating: false,
@@ -67,6 +72,27 @@
   };
 
   function uid(){ return Math.random().toString(36).slice(2,9); }
+
+  // ---------- Persistencia (localStorage) ----------
+  const STORAGE_KEY = "chaosDiscGolfState_v1";
+  let pendingResumeDecision = false;
+
+  function saveState(){
+    if(pendingResumeDecision) return; // no pisar el respaldo mientras el usuario decide
+    try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+    catch(e){ /* si falla (modo privado, cuota llena, etc.) simplemente no persiste */ }
+  }
+
+  function loadSavedState(){
+    try{
+      const raw = localStorage.getItem(STORAGE_KEY);
+      return raw ? JSON.parse(raw) : null;
+    }catch(e){ return null; }
+  }
+
+  function clearSavedState(){
+    try{ localStorage.removeItem(STORAGE_KEY); }catch(e){}
+  }
 
   function shuffle(arr){
     const a = arr.slice();
@@ -81,6 +107,8 @@
     state.block = block;
     const holes = block === "front" ? [1,2,3,4,5,6,7,8,9] : [10,11,12,13,14,15,16,17,18];
     state.blockOrder = shuffle(holes);
+    if(!state.playOrder) state.playOrder = {front:[], back:[]};
+    state.playOrder[block] = state.blockOrder.slice();
     state.blockIndex = 0;
     state.blockState = {
       swapActive: null,        // {a,b} companions active THIS hole (from previous hole birdie)
@@ -145,6 +173,7 @@
     const others = state.players.filter(p => !birdieMakers.includes(p.id));
     const allOthersBogeyPlus = others.every(p => scores[p.id] >= 1);
 
+
     // ---------- Determine Shuffle de Discos (Regla 2) for NEXT hole ----------
     let swapEvent = null;
     if(birdieMakers.length === 1 && allOthersBogeyPlus && others.length>0){
@@ -182,6 +211,10 @@
     }
 
     // ---------- Glitch del Líder (Regla 4), window = positions 1-8 ----------
+    // En la posición 8 (última oportunidad del bloque), si sigue habiendo empate
+    // en el mejor o el peor resultado, se desempata al azar en vez de cancelarse —
+    // así el evento casi siempre logra aplicar una vez por bloque, incluso con
+    // marcadores muy parejos entre los jugadores.
     let glitchEvent = null;
     if(pos <= 8 && !bs.glitchTriggered){
       const bestVal = Math.min(...state.players.map(p=>scores[p.id]));
@@ -190,13 +223,21 @@
       const worstPlayers = state.players.filter(p=>scores[p.id]===worstVal);
       const remaining = 8 - pos + 1;
       const roll = Math.random() < (1/remaining);
+      const eligible = bestPlayers.length===1 && worstPlayers.length===1 && bestPlayers[0].id !== worstPlayers[0].id;
       if(roll){
-        if(bestPlayers.length===1 && worstPlayers.length===1 && bestPlayers[0].id !== worstPlayers[0].id){
+        if(eligible){
           bs.glitchTriggered = true;
           glitchEvent = {type:"glitch_lider", best: bestPlayers[0].id, worst: worstPlayers[0].id,
             bestScore: bestVal, worstScore: worstVal};
+        } else if(pos === 8 && bestVal !== worstVal){
+          // última oportunidad del bloque: desempate al azar entre los empatados
+          const chosenBest = bestPlayers[Math.floor(Math.random()*bestPlayers.length)];
+          const chosenWorst = worstPlayers[Math.floor(Math.random()*worstPlayers.length)];
+          bs.glitchTriggered = true;
+          glitchEvent = {type:"glitch_lider", best: chosenBest.id, worst: chosenWorst.id,
+            bestScore: bestVal, worstScore: worstVal};
         }
-        // if tie, we simply skip (no retrigger) — counts as consumed slot per simplification
+        // si sigue empatado en pos<8, o si TODOS empataron igual incluso en pos8, se desperdicia sin forzar
       }
     }
 
@@ -211,6 +252,7 @@
     if(forcedEvent) queue.push(forcedEvent);
     if(swapEvent && !forcedEvent) queue.push(swapEvent); // forced already includes its own swap resolution
 
+
     state.eventQueue = queue;
     processNextEvent();
   }
@@ -224,44 +266,47 @@
     const ev = state.eventQueue.shift();
     state.pendingEvent = ev;
     if(ev.type === "robo"){
-      // apply swap of that hole's scores between a and b
+      // el castigo se aplica después (ver applyRoboEffect), para dar chance de "salvarse"
       const pa = state.players.find(p=>p.id===ev.a);
       const pb = state.players.find(p=>p.id===ev.b);
-      const delta = ev.bScore - ev.aScore;
-      pa.total += delta;
-      pb.total -= delta;
+      ev.victim = (ev.aScore <= ev.bScore) ? ev.a : ev.b; // quien tenía el mejor resultado pierde
       playSiren();
-      state.blockState.log.push(`Hoyo ${currentHoleNumber()}: Robo de Identidad entre ${pa.name} y ${pb.name}.`);
     } else if(ev.type === "glitch_lider"){
-      const pb = state.players.find(p=>p.id===ev.best);
-      const pw = state.players.find(p=>p.id===ev.worst);
-      const delta = ev.worstScore - ev.bestScore;
-      pb.total += delta;
-      pw.total -= delta;
+      ev.victim = ev.best; // quien tenía el mejor resultado del hoyo pierde
       playSiren();
-      state.blockState.log.push(`Hoyo ${currentHoleNumber()}: Glitch del Líder invierte a ${pb.name} y ${pw.name}.`);
     } else if(ev.type === "swap_single" || ev.type === "swap_tie"){
       playChime();
     } else if(ev.type === "forced_swap_robo"){
       playSiren();
     } else if(ev.type === "forced_none"){
-      state.blockState.log.push(`Hoyo ${currentHoleNumber()}: hoyo forzado sin Birdie — no hay Robo de Identidad este bloque.`);
+      logEvent("Hoyo forzado sin Birdie — no hay Robo de Identidad este bloque.");
     }
     render();
   }
 
-  function resolveCompanionChoice(mainPid, companionPid, reciprocal){
-    // sets swapNextHole to apply starting NEXT hole processed
-    state.blockState.swapActive = null;
-    state._pendingSwapForNext = {a: mainPid, b: companionPid, reciprocal: !!reciprocal};
-    continueFromEvent();
+  function logEvent(text){
+    state.fullLog.push({block: state.block, hole: currentHoleNumber(), text});
   }
 
-  function resolveForced(mainPid, companionPid){
-    // applies swap+robo immediately on THIS hole
-    const bs = state.blockState;
-    bs.robTriggered = true;
-    bs.anyValidSwapHappened = true;
+  function applyRoboEffect(ev){
+    const pa = state.players.find(p=>p.id===ev.a);
+    const pb = state.players.find(p=>p.id===ev.b);
+    const delta = ev.bScore - ev.aScore;
+    pa.total += delta;
+    pb.total -= delta;
+    logEvent(`🚨 Robo de Identidad entre ${pa.name} y ${pb.name}.`);
+  }
+
+  function applyGlitchLiderEffect(ev){
+    const pb = state.players.find(p=>p.id===ev.best);
+    const pw = state.players.find(p=>p.id===ev.worst);
+    const delta = ev.worstScore - ev.bestScore;
+    pb.total += delta;
+    pw.total -= delta;
+    logEvent(`🚨 Glitch del Líder invierte a ${pb.name} y ${pw.name}.`);
+  }
+
+  function applyForcedRoboEffect(mainPid, companionPid){
     const pa = state.players.find(p=>p.id===mainPid);
     const pb = state.players.find(p=>p.id===companionPid);
     const scoreA = state.holeScores[mainPid];
@@ -269,8 +314,27 @@
     const delta = scoreB - scoreA;
     pa.total += delta;
     pb.total -= delta;
-    bs.log.push(`Hoyo ${currentHoleNumber()}: hoyo forzado — combo Shuffle de Discos + Robo de Identidad entre ${pa.name} y ${pb.name}.`);
+    logEvent(`🚨 Hoyo forzado — combo Shuffle de Discos + Robo de Identidad entre ${pa.name} y ${pb.name}.`);
+  }
+
+  function resolveCompanionChoice(mainPid, companionPid, reciprocal){
+    // sets swapNextHole to apply starting NEXT hole processed
+    const pMain = state.players.find(p=>p.id===mainPid);
+    const pComp = state.players.find(p=>p.id===companionPid);
+    logEvent(`🔄 Shuffle de Discos: ${pMain.name} y ${pComp.name} intercambian disco para el siguiente hoyo${reciprocal ? " (recíproco)" : ""}.`);
+    state.blockState.swapActive = null;
+    state._pendingSwapForNext = {a: mainPid, b: companionPid, reciprocal: !!reciprocal};
     continueFromEvent();
+  }
+
+  function resolveForced(mainPid, companionPid){
+    // marca el bloque como resuelto, pero el castigo se aplica después
+    // de dar oportunidad de "salvarse" (ver renderGlitchOverlay)
+    const bs = state.blockState;
+    bs.robTriggered = true;
+    bs.anyValidSwapHappened = true;
+    state.pendingEvent = {type:"forced_apply_confirm", birdie: mainPid, companion: companionPid, victim: mainPid};
+    render();
   }
 
   function continueFromEvent(){
@@ -333,24 +397,28 @@
     else if(state.screen === "scoring") html += renderScoring();
     else if(state.screen === "leaderboardBlock") html += renderBlockLeaderboard();
     else if(state.screen === "finalBoard") html += renderFinalBoard();
+    else if(state.screen === "scorecard") html += renderScorecard();
     html += `</main>`;
-    if(state.screen !== "setup") html += renderScoreboardFooterToggle();
+    if(state.screen !== "setup" && state.screen !== "scorecard") html += renderScoreboardFooterToggle();
     app.innerHTML = html;
     attachHandlers();
     if(state.pendingEvent){
       renderGlitchOverlay();
     }
+    saveState();
   }
 
   function renderTopbar(){
     const frontActive = state.block === "front";
     const backActive = state.block === "back";
+    const showReset = !["setup","finalBoard"].includes(state.screen);
     return `
     <header class="topbar">
       <div class="brand"><span style="color:var(--text);">CHAOS</span> <span style="color:var(--lime);">DISC</span><span style="display:inline-flex;margin:0 -1px;">${basketLogo()}</span><span style="color:var(--lime);">GOLF</span></div>
-      <div style="display:flex;gap:6px;">
+      <div style="display:flex;gap:6px;align-items:center;">
         <div class="block-pill ${frontActive?'active':''}">FRONT 9</div>
         <div class="block-pill ${backActive?'active':''}">BACK 9</div>
+        ${showReset ? `<button id="resetRoundBtn" class="reset-btn" title="Reiniciar ronda">↺</button>` : ""}
       </div>
     </header>`;
   }
@@ -388,6 +456,7 @@
               <div class="par-toggle" data-hole="${h}">
                 <button class="par-opt ${state.pars[h]===3?'selected':''}" data-hole="${h}" data-par="3">P3</button>
                 <button class="par-opt ${state.pars[h]===4?'selected':''}" data-hole="${h}" data-par="4">P4</button>
+                <button class="par-opt ${state.pars[h]===5?'selected':''}" data-hole="${h}" data-par="5">P5</button>
               </div>
             </div>`).join("")}
         </div>
@@ -473,12 +542,14 @@
   function renderBlockLeaderboard(){
     const other = state.block === "front" ? "back" : "front";
     const bothDone = state.finalBlockDone.front && state.finalBlockDone.back;
+    const blockLog = state.fullLog.filter(l=>l.block===state.block);
     return `
       <div class="screen">
         <div class="eyebrow">${state.block==='front'?'Front 9':'Back 9'} completado</div>
         <h1 class="title">Así va el marcador</h1>
         ${renderScoreboardCard()}
-        ${state.blockState.log.length ? `<div class="card"><div class="eyebrow" style="margin-bottom:8px;">Eventos de este bloque</div><div class="log-list">${state.blockState.log.map(l=>`· ${l}`).join("<br>")}</div></div>` : ""}
+        ${blockLog.length ? `<div class="card"><div class="eyebrow" style="margin-bottom:8px;">Eventos de este bloque</div><div class="log-list">${blockLog.map(l=>`· Hoyo ${l.hole}: ${l.text}`).join("<br>")}</div></div>` : ""}
+        <button class="btn-ghost" id="toScorecard" style="margin-bottom:14px;">📋 Ver tarjeta completa</button>
       </div>
       <footer class="bottombar">
         ${bothDone
@@ -496,9 +567,69 @@
         <div class="eyebrow">Ronda completa · 18 hoyos</div>
         <h1 class="title">🏆 ${winner.name} se lleva la card</h1>
         ${renderScoreboardCard()}
+        <button class="btn-ghost" id="toScorecard" style="margin-bottom:14px;">📋 Ver tarjeta completa</button>
       </div>
       <footer class="bottombar">
         <button class="btn-primary" id="newRound">Jugar otra ronda</button>
+      </footer>
+    `;
+  }
+
+  function renderScorecard(){
+    const blocks = [
+      {key:"front", label:"Front 9", holes:[1,2,3,4,5,6,7,8,9]},
+      {key:"back", label:"Back 9", holes:[10,11,12,13,14,15,16,17,18]},
+    ];
+
+    const tables = blocks.map(b=>{
+      const played = state.players.length && state.players[0].holes.some(h=>h.block===b.key);
+      if(!played) return `<div class="card"><div class="eyebrow">${b.label}</div><p class="center-note" style="margin:8px 0 0;">Todavía no se juega este bloque.</p></div>`;
+
+      const headerCells = b.holes.map(h=>`<th>${h}<br><span class="sc-par">P${state.pars[h]}</span></th>`).join("");
+      const rows = state.players.map(p=>{
+        const cells = b.holes.map(h=>{
+          const entry = p.holes.find(x=>x.hole===h && x.block===b.key);
+          if(!entry) return `<td>—</td>`;
+          const raw = state.pars[h] + entry.score;
+          const cls = entry.score <= -1 ? "sc-good" : (entry.score >= 1 ? "sc-bad" : "sc-even");
+          return `<td class="${cls}">${raw}</td>`;
+        }).join("");
+        return `<tr><td class="sc-name">${p.name}</td>${cells}</tr>`;
+      }).join("");
+
+      const blockLog = state.fullLog.filter(l=>l.block===b.key);
+      const logHtml = blockLog.length
+        ? `<div class="log-list" style="margin-top:10px;">${blockLog.map(l=>`· Hoyo ${l.hole}: ${l.text}`).join("<br>")}</div>`
+        : `<p class="center-note" style="margin:8px 0 0;">Sin eventos en este bloque.</p>`;
+
+      const order = (state.playOrder && state.playOrder[b.key]) || [];
+      const orderHtml = order.length
+        ? `<p class="center-note" style="text-align:left;margin:10px 0 0;">🔀 Orden jugado: ${order.join(" → ")}</p>`
+        : "";
+
+      return `
+        <div class="card">
+          <div class="eyebrow" style="margin-bottom:8px;">${b.label}</div>
+          <div style="overflow-x:auto;">
+            <table class="scorecard-table">
+              <thead><tr><th></th>${headerCells}</tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+          ${orderHtml}
+          ${logHtml}
+        </div>`;
+    }).join("");
+
+    return `
+      <div class="screen">
+        <div class="eyebrow">Registro completo</div>
+        <h1 class="title">Tarjeta de la ronda</h1>
+        <p class="sub">Tiros reales por hoyo (par ya aplicado) y todos los eventos que saltaron.</p>
+        ${tables}
+      </div>
+      <footer class="bottombar">
+        <button class="btn-primary" id="backFromScorecard">Regresar</button>
       </footer>
     `;
   }
@@ -527,43 +658,72 @@
     const ev = state.pendingEvent;
     let title = "", desc = "", cta = "Continuar";
     let bodyExtra = "";
+    let punishing = false; // true = este evento aplica un castigo real (elegible para "salvarme")
+    let victimId = ev.victim || null;
 
     if(ev.type === "robo"){
       const pa = state.players.find(p=>p.id===ev.a), pb = state.players.find(p=>p.id===ev.b);
       title = "🚨 ¡ROBO DE IDENTIDAD!";
-      desc = `Los golpes de este hoyo se intercambian entre <b>${pa.name}</b> y <b>${pb.name}</b>. Solo afecta este hoyo.`;
+      desc = getEventMessage("robo", {player:`<b>${pa.name}</b>`, player2:`<b>${pb.name}</b>`});
+      cta = "Aplicar castigo";
+      punishing = true;
     } else if(ev.type === "glitch_lider"){
       const pb = state.players.find(p=>p.id===ev.best), pw = state.players.find(p=>p.id===ev.worst);
       title = "🚨 ¡GLITCH DEL LÍDER!";
-      desc = `Se invierte el mejor y el peor resultado del hoyo entre <b>${pb.name}</b> y <b>${pw.name}</b>.`;
+      desc = getEventMessage("glitch_lider", {player:`<b>${pb.name}</b>`, player2:`<b>${pw.name}</b>`});
+      cta = "Aplicar castigo";
+      punishing = true;
     } else if(ev.type === "swap_single"){
       const pMain = state.players.find(p=>p.id===ev.birdie);
       const options = state.players.filter(p=>p.id!==ev.birdie);
       title = "🔄 ¡SHUFFLE DE DISCOS!";
-      desc = `<b>${pMain.name}</b> hizo Birdie en solitario. Elige con quién intercambia disco para el siguiente hoyo.`;
+      desc = getEventMessage("swap_single", {player:`<b>${pMain.name}</b>`}) + " Elige con quién intercambia disco:";
       bodyExtra = `<select class="pick" id="companionPick">${options.map(o=>`<option value="${o.id}">${o.name}</option>`).join("")}</select>`;
       cta = "Confirmar intercambio";
     } else if(ev.type === "swap_tie"){
       const pMain = state.players.find(p=>p.id===ev.birdie);
       const options = state.players.filter(p=>p.id!==ev.birdie);
       title = "🔄 ¡SHUFFLE DE DISCOS (empate)!";
-      desc = `Hubo empate de Birdie y el sistema eligió a <b>${pMain.name}</b>. Elige compañero — el intercambio será recíproco.`;
+      desc = getEventMessage("swap_tie", {player:`<b>${pMain.name}</b>`}) + " Elige compañero — el intercambio será recíproco.";
       bodyExtra = `<select class="pick" id="companionPick">${options.map(o=>`<option value="${o.id}">${o.name}</option>`).join("")}</select>`;
       cta = "Confirmar intercambio";
     } else if(ev.type === "forced_swap_robo"){
       const pMain = state.players.find(p=>p.id===ev.birdie);
       const options = state.players.filter(p=>p.id!==ev.birdie);
       title = "🚨 ¡HOYO FORZADO!";
-      desc = `Sin Shuffle de Discos válido en el bloque, <b>${pMain.name}</b> hizo el Birdie de cierre. Se dispara Shuffle de Discos + Robo de Identidad en este mismo hoyo. Elige compañero:`;
+      desc = getEventMessage("forced_swap_robo", {player:`<b>${pMain.name}</b>`}) + " Elige compañero:";
       bodyExtra = `<select class="pick" id="companionPick">${options.map(o=>`<option value="${o.id}">${o.name}</option>`).join("")}</select>`;
       cta = "Aplicar combo";
+    } else if(ev.type === "forced_apply_confirm"){
+      const pa = state.players.find(p=>p.id===ev.birdie), pb = state.players.find(p=>p.id===ev.companion);
+      title = "🚨 ¡COMBO FORZADO!";
+      desc = `Se va a aplicar el intercambio de este hoyo entre <b>${pa.name}</b> y <b>${pb.name}</b>.`;
+      cta = "Aplicar castigo";
+      punishing = true;
     } else if(ev.type === "forced_none"){
       title = "Hoyo de cierre sin Birdie";
-      desc = `Nadie hizo Birdie en el hoyo forzado — este bloque se queda sin Robo de Identidad.`;
+      desc = getEventMessage("forced_none", {});
     }
 
+    const victim = victimId ? state.players.find(p=>p.id===victimId) : null;
+    const canSave = punishing && victim && !victim.usedSave;
+
+    function applyThePunishment(){
+      if(ev.type === "robo") applyRoboEffect(ev);
+      else if(ev.type === "glitch_lider") applyGlitchLiderEffect(ev);
+      else if(ev.type === "forced_apply_confirm") applyForcedRoboEffect(ev.birdie, ev.companion);
+    }
+
+    const saveBtnHtml = canSave
+      ? `<button class="btn-ghost" id="saveAttemptBtn" style="margin-top:8px;border-color:var(--amber);color:var(--amber);">🎰 ${victim.name}, intentar salvarme (única oportunidad · 25%)</button>`
+      : "";
+
+    let flashClass = "";
+    if(punishing) flashClass = "flash-danger";
+    else if(ev.type === "swap_single" || ev.type === "swap_tie" || ev.type === "forced_swap_robo") flashClass = "flash-info";
+
     const overlay = document.createElement("div");
-    overlay.className = "glitch-overlay";
+    overlay.className = `glitch-overlay ${flashClass}`;
     overlay.innerHTML = `
       <div class="glitch-card">
         <div class="glitch-siren">🚨</div>
@@ -571,35 +731,76 @@
         <div class="glitch-desc">${desc}</div>
         ${bodyExtra}
         <button class="btn-primary" id="glitchContinue" style="margin-top:${bodyExtra?'14px':'0'};">${cta}</button>
+        ${saveBtnHtml}
       </div>
     `;
     document.body.appendChild(overlay);
-    document.getElementById("glitchContinue").addEventListener("click", ()=>{
+
+    function finishAndContinue(){
+      let comp = null;
+      if(ev.type === "swap_single" || ev.type === "swap_tie" || ev.type === "forced_swap_robo"){
+        const sel = document.getElementById("companionPick");
+        comp = sel ? sel.value : null;
+      }
       document.body.removeChild(overlay);
       if(ev.type === "swap_single"){
-        const comp = document.getElementById("companionPick").value;
         resolveCompanionChoice(ev.birdie, comp, false);
       } else if(ev.type === "swap_tie"){
-        const comp = document.getElementById("companionPick").value;
         resolveCompanionChoice(ev.birdie, comp, true);
       } else if(ev.type === "forced_swap_robo"){
-        const comp = document.getElementById("companionPick").value;
         resolveForced(ev.birdie, comp);
       } else {
         continueFromEvent();
       }
+    }
+
+    document.getElementById("glitchContinue").addEventListener("click", ()=>{
+      if(punishing) applyThePunishment();
+      finishAndContinue();
     });
+
+    if(canSave){
+      document.getElementById("saveAttemptBtn").addEventListener("click", ()=>{
+        victim.usedSave = true;
+        const success = Math.random() < 0.25;
+        logEvent(success
+          ? `🎰 ${victim.name} usó su única oportunidad de salvarse y le funcionó — castigo anulado.`
+          : `🎰 ${victim.name} usó su única oportunidad de salvarse y no le funcionó.`);
+        const card = overlay.querySelector(".glitch-card");
+        if(success){
+          card.innerHTML = `
+            <div class="glitch-siren">🎰</div>
+            <div class="glitch-title" style="color:var(--lime);">¡SE SALVÓ!</div>
+            <div class="glitch-desc"><b>${victim.name}</b> gastó su única oportunidad de la ronda y le funcionó. El castigo queda anulado para este hoyo.</div>
+            <button class="btn-primary" id="afterSaveContinue">Continuar</button>
+          `;
+        } else {
+          card.innerHTML = `
+            <div class="glitch-siren">🎰</div>
+            <div class="glitch-title">SIN SUERTE</div>
+            <div class="glitch-desc"><b>${victim.name}</b> gastó su única oportunidad de la ronda y no funcionó. El castigo se aplica normal.</div>
+            <button class="btn-primary" id="afterSaveContinue">Continuar</button>
+          `;
+        }
+        document.getElementById("afterSaveContinue").addEventListener("click", ()=>{
+          if(!success) applyThePunishment();
+          finishAndContinue();
+        });
+      });
+    }
   }
 
   function attachHandlers(){
     const addBtn = document.getElementById("addPlayer");
     if(addBtn) addBtn.addEventListener("click", ()=>{
-      state.players.push({id:uid(), name:"", total:0, holes:[]});
+      state.players.push({id:uid(), name:"", total:0, holes:[], usedSave:false});
       render();
     });
     document.querySelectorAll("[data-pidx]").forEach(inp=>{
       inp.addEventListener("input", (e)=>{
         state.players[+e.target.dataset.pidx].name = e.target.value;
+        const btn = document.getElementById("toPars");
+        if(btn) btn.disabled = state.players.filter(p=>p.name.trim()).length < 2;
       });
     });
     document.querySelectorAll("[data-remove]").forEach(btn=>{
@@ -654,21 +855,108 @@
       render();
     });
 
+    const toScorecard = document.getElementById("toScorecard");
+    if(toScorecard) toScorecard.addEventListener("click", ()=>{
+      state.prevScreen = state.screen;
+      state.screen = "scorecard";
+      render();
+    });
+
+    const backFromScorecard = document.getElementById("backFromScorecard");
+    if(backFromScorecard) backFromScorecard.addEventListener("click", ()=>{
+      state.screen = state.prevScreen || "leaderboardBlock";
+      render();
+    });
+
     const newRound = document.getElementById("newRound");
     if(newRound) newRound.addEventListener("click", ()=>{
-      const freshPars = {};
-      for(let h=1;h<=18;h++){ freshPars[h]=3; }
-      state = {
-        screen:"setup", players:[], pars:freshPars, block:null, blockOrder:[], blockIndex:0, blockState:null,
-        holeScores:{}, pendingEvent:null, log:[], showLog:false, revealAnimating:false,
-        finalBlockDone:{front:false, back:false},
-      };
+      resetToNewRound();
+    });
+
+    const resetRoundBtn = document.getElementById("resetRoundBtn");
+    if(resetRoundBtn) resetRoundBtn.addEventListener("click", ()=>{
+      showResetConfirm();
+    });
+  }
+
+  function resetToNewRound(){
+    clearSavedState();
+    state = freshDefaultState();
+    render();
+  }
+
+  function showResetConfirm(){
+    const overlay = document.createElement("div");
+    overlay.className = "glitch-overlay";
+    overlay.innerHTML = `
+      <div class="glitch-card">
+        <div class="glitch-siren">⚠️</div>
+        <div class="glitch-title" style="color:var(--amber);animation:none;">¿REINICIAR RONDA?</div>
+        <div class="glitch-desc">Se va a borrar todo el progreso de la ronda actual (marcador, hoyos jugados, eventos). Esto no se puede deshacer.</div>
+        <button class="btn-primary" id="confirmResetBtn" style="background:var(--magenta);color:#fff;margin-bottom:8px;">Sí, reiniciar todo</button>
+        <button class="btn-ghost" id="cancelResetBtn">Cancelar, seguir jugando</button>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    document.getElementById("confirmResetBtn").addEventListener("click", ()=>{
+      document.body.removeChild(overlay);
+      resetToNewRound();
+    });
+    document.getElementById("cancelResetBtn").addEventListener("click", ()=>{
+      document.body.removeChild(overlay);
+    });
+  }
+
+  // ---------- Arranque ----------
+  function freshDefaultState(){
+    const freshPars = {};
+    for(let h=1;h<=18;h++){ freshPars[h] = 3; }
+    return {
+      screen:"setup", prevScreen:"leaderboardBlock",
+      players:[0,1,2,3].map(()=>({id:uid(), name:"", total:0, holes:[], usedSave:false})),
+      pars:freshPars, block:null, blockOrder:[], blockIndex:0, blockState:null, playOrder:{front:[], back:[]},
+      holeScores:{}, pendingEvent:null, fullLog:[], log:[], showLog:false, revealAnimating:false,
+      finalBlockDone:{front:false, back:false},
+    };
+  }
+
+  function showResumePrompt(saved){
+    const holeInfo = saved.block ? `${saved.block==='front'?'Front 9':'Back 9'}, hoyo ${saved.blockIndex+1} de 9` : "";
+    const overlay = document.createElement("div");
+    overlay.className = "glitch-overlay";
+    overlay.innerHTML = `
+      <div class="glitch-card">
+        <div class="glitch-siren">📋</div>
+        <div class="glitch-title" style="color:var(--cyan);animation:none;">RONDA EN CURSO</div>
+        <div class="glitch-desc">Encontramos una ronda sin terminar (${holeInfo}). ¿Quieres continuarla o empezar una nueva?</div>
+        <button class="btn-primary" id="resumeBtn" style="margin-bottom:8px;">Continuar ronda</button>
+        <button class="btn-ghost" id="freshBtn">Empezar de nuevo</button>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    document.getElementById("resumeBtn").addEventListener("click", ()=>{
+      document.body.removeChild(overlay);
+      state = saved;
+      pendingResumeDecision = false;
+      render();
+    });
+    document.getElementById("freshBtn").addEventListener("click", ()=>{
+      document.body.removeChild(overlay);
+      clearSavedState();
+      state = freshDefaultState();
+      pendingResumeDecision = false;
       render();
     });
   }
 
-  // init with 4 empty player slots
-  state.players = [0,1,2,3].map(()=>({id:uid(), name:"", total:0, holes:[]}));
-  for(let h=1;h<=18;h++){ state.pars[h] = 3; }
+  const saved = loadSavedState();
+  if(saved && saved.players && saved.players.length && saved.screen && saved.screen !== "setup" && saved.screen !== "finalBoard"){
+    pendingResumeDecision = true;
+    state = freshDefaultState(); // pantalla base detrás del prompt
+    showResumePrompt(saved);
+  } else {
+    if(saved) clearSavedState(); // rondas ya terminadas no se ofrecen para continuar
+    state = freshDefaultState();
+  }
   render();
 })();

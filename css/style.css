@@ -26,6 +26,12 @@
   header.topbar .brand span{color:var(--lime);}
   .block-pill{font-family:'Space Mono',monospace;font-size:11px;padding:5px 10px;border-radius:999px;border:1px solid var(--line);color:var(--text-dim);}
   .block-pill.active{color:var(--lime);border-color:var(--lime);}
+  .reset-btn{
+    font-family:'Space Mono',monospace;font-size:14px;color:var(--text-dim);
+    background:var(--bg-panel);border:1px solid var(--line);border-radius:999px;
+    width:28px;height:28px;line-height:1;padding:0;cursor:pointer;
+  }
+  .reset-btn:active{color:var(--amber);border-color:var(--amber);}
 
   main{flex:1;padding:20px;padding-bottom:110px;}
   .screen{animation:fadeUp .35s ease;}
@@ -107,6 +113,16 @@
     position:fixed;inset:0;z-index:100;display:flex;align-items:center;justify-content:center;
     background:rgba(6,7,10,.88);backdrop-filter:blur(2px);
   }
+  .glitch-overlay.flash-danger{animation:screenFlashDanger .5s ease-in-out 5;}
+  .glitch-overlay.flash-info{animation:screenFlashInfo .5s ease-in-out 3;}
+  @keyframes screenFlashDanger{
+    0%,100%{background:rgba(6,7,10,.88);}
+    50%{background:rgba(255,62,165,.4);}
+  }
+  @keyframes screenFlashInfo{
+    0%,100%{background:rgba(6,7,10,.88);}
+    50%{background:rgba(61,219,255,.32);}
+  }
   .glitch-card{
     max-width:400px;width:88%;background:var(--bg-panel);border:1px solid var(--magenta);border-radius:18px;
     padding:28px 22px;text-align:center;position:relative;overflow:hidden;
@@ -158,3 +174,15 @@
     font-family:'Space Mono',monospace;font-size:12px;font-weight:700;padding:6px 0;border-radius:7px;
   }
   .par-opt.selected{background:var(--lime);border-color:var(--lime);color:#0A0D12;}
+
+  /* Tarjeta completa / scorecard */
+  .scorecard-table{border-collapse:collapse;width:100%;font-family:'Space Mono',monospace;font-size:12px;}
+  .scorecard-table th, .scorecard-table td{
+    padding:6px 8px;text-align:center;border-bottom:1px solid var(--line);white-space:nowrap;
+  }
+  .scorecard-table th{color:var(--text-dim);font-weight:700;font-size:11px;}
+  .scorecard-table .sc-par{color:var(--text-dim);font-size:9px;font-weight:400;}
+  .scorecard-table .sc-name{text-align:left;font-family:'Sora',sans-serif;font-weight:600;color:var(--text);}
+  .scorecard-table td.sc-good{color:var(--lime);font-weight:700;}
+  .scorecard-table td.sc-bad{color:var(--amber);font-weight:700;}
+  .scorecard-table td.sc-even{color:var(--text-dim);}
