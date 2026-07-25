@@ -203,3 +203,9 @@
   .hand-card:disabled{opacity:.4;}
   .hand-card .hc-name{display:block;font-weight:700;font-size:13px;margin-bottom:2px;}
   .hand-card .hc-desc{display:block;font-size:12px;color:var(--text-dim);line-height:1.4;}
+
+  .putt-zurdo-check{
+    display:flex;align-items:center;gap:8px;text-align:left;background:var(--bg-panel-2);
+    border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-top:8px;font-size:14px;
+  }
+  .putt-zurdo-check input{width:18px;height:18px;accent-color:var(--lime);}

@@ -116,7 +116,7 @@
   function startBlock(block){
     state.block = block;
     const holes = block === "front" ? [1,2,3,4,5,6,7,8,9] : [10,11,12,13,14,15,16,17,18];
-    state.blockOrder = shuffle(holes);
+    state.blockOrder = holes; // orden natural — el shuffle de hoyos se quitó por logística de cancha
     if(!state.playOrder) state.playOrder = {front:[], back:[]};
     state.playOrder[block] = state.blockOrder.slice();
     state.blockIndex = 0;
@@ -283,12 +283,19 @@
       bs.anyValidSwapHappened = true;
     }
 
+    // ---------- Putt Zurdo: los 4 del card sacan exactamente Bogey en el hoyo ----------
+    let puttZurdoEvent = null;
+    if(state.players.length === 4 && state.players.every(p => scores[p.id] === 1)){
+      puttZurdoEvent = {type:"putt_zurdo"};
+    }
+
     // queue events in a sensible order: forced > robo > glitch > swap-companion-pick
     const queue = [];
     if(roboEvent) queue.push(roboEvent);
     if(glitchEvent) queue.push(glitchEvent);
     if(forcedEvent) queue.push(forcedEvent);
     if(swapEvent && !forcedEvent) queue.push(swapEvent); // forced already includes its own swap resolution
+    if(puttZurdoEvent) queue.push(puttZurdoEvent);
 
 
     state.eventQueue = queue;
@@ -320,6 +327,8 @@
       playSiren();
     } else if(ev.type === "forced_none"){
       logEvent("Hoyo forzado sin Birdie — no hay Robo de Identidad este bloque.");
+    } else if(ev.type === "putt_zurdo"){
+      playChime();
     }
     render();
   }
@@ -365,6 +374,23 @@
     pa.total += delta;
     pb.total -= delta;
     logEvent(`🚨 Hoyo forzado — combo Shuffle de Discos + Robo de Identidad entre ${pa.name} y ${pb.name}.`);
+  }
+
+  function applyPuttZurdo(savedPlayerIds){
+    const holeNum = currentHoleNumber();
+    savedPlayerIds.forEach(pid=>{
+      const p = state.players.find(x=>x.id===pid);
+      if(!p) return;
+      p.total -= 1;
+      const entry = p.holes.find(h=>h.hole===holeNum && h.block===state.block);
+      if(entry) entry.score = 0; // de Bogey (+1) a Par (0)
+    });
+    if(savedPlayerIds.length){
+      const names = savedPlayerIds.map(id=>state.players.find(p=>p.id===id).name).join(", ");
+      logEvent(`🖐️ Putt Zurdo: ${names} salvaron el par con la mano contraria.`);
+    } else {
+      logEvent(`🖐️ Putt Zurdo: nadie logró salvar el par.`);
+    }
   }
 
   function resolveCompanionChoice(mainPid, companionPid, reciprocal){
@@ -493,7 +519,7 @@
       <div class="screen">
         <div class="eyebrow">Armar card</div>
         <h1 class="title">¿Quién juega hoy?</h1>
-        <p class="sub">Agrega a los jugadores de la card. El sistema baraja los hoyos y decide cuándo saltan los glitches.</p>
+        <p class="sub">Agrega a los jugadores de la card. El sistema decide cuándo saltan los glitches.</p>
         <div class="card">
           ${rows}
           <button class="btn-ghost" id="addPlayer">+ Agregar jugador</button>
@@ -553,7 +579,7 @@
         <div class="reveal-num ${state.revealAnimating?'glitching':''}" id="revealNum">${holeNum}</div>
         <div class="block-pill" style="margin-top:8px;">PAR ${par}</div>
         <div class="progress-dots">${dots}</div>
-        <p class="center-note">Siguiente destino del shuffle. Caminen al hoyo ${holeNum}.</p>
+        <p class="center-note">Siguiente hoyo. Caminen al hoyo ${holeNum}.</p>
       </div>
       <footer class="bottombar">
         ${state.skinsMode ? `<button class="btn-ghost" id="toCards" style="margin-bottom:10px;">🃏 Jugar cartas (opcional)</button>` : ""}
@@ -819,7 +845,7 @@
 
       const order = (state.playOrder && state.playOrder[b.key]) || [];
       const orderHtml = order.length
-        ? `<p class="center-note" style="text-align:left;margin:10px 0 0;">🔀 Orden jugado: ${order.join(" → ")}</p>`
+        ? `<p class="center-note" style="text-align:left;margin:10px 0 0;">Orden jugado: ${order.join(" → ")}</p>`
         : "";
 
       return `
@@ -918,6 +944,14 @@
     } else if(ev.type === "forced_none"){
       title = "Hoyo de cierre sin Birdie";
       desc = getEventMessage("forced_none", {});
+    } else if(ev.type === "putt_zurdo"){
+      title = "🖐️ ¡PUTT ZURDO!";
+      desc = "Los 4 sacaron Bogey en este hoyo. Cada quien repite su putt desde la misma posición, con la mano contraria, para intentar salvar el par. Marca quién lo logró:";
+      bodyExtra = state.players.map(p=>`
+        <label class="putt-zurdo-check">
+          <input type="checkbox" id="pz_${p.id}" value="${p.id}"/> ${p.name} salvó el par
+        </label>`).join("");
+      cta = "Confirmar resultados";
     }
 
     // Si el Escudo (modo Skins Chaos) ya bloqueó el castigo, se muestra un mensaje especial
@@ -950,7 +984,7 @@
 
     let flashClass = "";
     if(punishing) flashClass = "flash-danger";
-    else if(ev.type === "swap_single" || ev.type === "swap_tie" || ev.type === "forced_swap_robo") flashClass = "flash-info";
+    else if(ev.type === "swap_single" || ev.type === "swap_tie" || ev.type === "forced_swap_robo" || ev.type === "putt_zurdo") flashClass = "flash-info";
 
     const overlay = document.createElement("div");
     overlay.className = `glitch-overlay ${flashClass}`;
@@ -972,6 +1006,12 @@
         const sel = document.getElementById("companionPick");
         comp = sel ? sel.value : null;
       }
+      let puttZurdoSaved = null;
+      if(ev.type === "putt_zurdo"){
+        puttZurdoSaved = state.players
+          .filter(p => document.getElementById(`pz_${p.id}`) && document.getElementById(`pz_${p.id}`).checked)
+          .map(p => p.id);
+      }
       document.body.removeChild(overlay);
       if(ev.type === "swap_single"){
         resolveCompanionChoice(ev.birdie, comp, false);
@@ -979,6 +1019,9 @@
         resolveCompanionChoice(ev.birdie, comp, true);
       } else if(ev.type === "forced_swap_robo"){
         resolveForced(ev.birdie, comp);
+      } else if(ev.type === "putt_zurdo"){
+        applyPuttZurdo(puttZurdoSaved);
+        continueFromEvent();
       } else {
         continueFromEvent();
       }
