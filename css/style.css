@@ -186,3 +186,20 @@
   .scorecard-table td.sc-good{color:var(--lime);font-weight:700;}
   .scorecard-table td.sc-bad{color:var(--amber);font-weight:700;}
   .scorecard-table td.sc-even{color:var(--text-dim);}
+
+  /* Modo Skins Chaos */
+  .mode-toggle{
+    font-family:'Space Mono',monospace;font-weight:700;font-size:13px;
+    background:var(--bg-panel-2);border:1px solid var(--line);color:var(--text-dim);
+    padding:8px 16px;border-radius:999px;
+  }
+  .mode-toggle.selected{background:var(--lime);border-color:var(--lime);color:#0A0D12;}
+
+  .hand-grid{display:flex;flex-direction:column;gap:8px;margin-top:8px;}
+  .hand-card{
+    text-align:left;background:var(--bg-panel-2);border:1px solid var(--line);border-radius:10px;
+    padding:10px 12px;color:var(--text);
+  }
+  .hand-card:disabled{opacity:.4;}
+  .hand-card .hc-name{display:block;font-weight:700;font-size:13px;margin-bottom:2px;}
+  .hand-card .hc-desc{display:block;font-size:12px;color:var(--text-dim);line-height:1.4;}

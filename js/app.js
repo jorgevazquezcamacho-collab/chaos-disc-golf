@@ -53,10 +53,10 @@
   }
 
   let state = {
-    screen: "setup",         // setup | pars | reveal | scoring | leaderboardBlock | finalBoard | scorecard
+    screen: "setup",         // setup | pars | reveal | cards | scoring | leaderboardBlock | finalBoard | scorecard
     prevScreen: "leaderboardBlock", // a dónde regresar desde la tarjeta completa
     players: [],             // {id,name,total, holes:[{hole,block,score}]}
-    pars: {},                // {holeNumber: 3|4}
+    pars: {},                // {holeNumber: 3|4|5}
     block: null,             // 'front' | 'back'
     blockOrder: [],          // shuffled hole numbers for current block
     blockIndex: 0,           // pointer into blockOrder
@@ -69,6 +69,16 @@
     showLog: false,
     revealAnimating: false,
     finalBlockDone: {front:false, back:false},
+    // ---- Modo Skins Chaos (opcional) ----
+    skinsMode: false,
+    skinsInitialized: false,
+    deck: [], discard: [],
+    skinPool: 1,
+    holeDoubleBy: null,       // playerId que jugó Doble o Nada este hoyo
+    pressionActive: false,    // si se jugó Presión este hoyo
+    lastPlayedCard: null,     // {cardId, byPlayerId} — para Carta Espejo
+    cardsPlayedThisHole: [],  // playerIds que ya jugaron carta este hoyo
+    cardTargetsHitThisHole: [], // playerIds que ya recibieron una carta en contra este hoyo
   };
 
   function uid(){ return Math.random().toString(36).slice(2,9); }
@@ -165,6 +175,34 @@
       p.total += scores[p.id];
       p.holes.push({hole:holeNum, block:state.block, score:scores[p.id]});
     });
+
+    // ---------- Modo Skins Chaos: resolver skin del hoyo ----------
+    if(state.skinsMode){
+      const minScore = Math.min(...state.players.map(p=>scores[p.id]));
+      const winners = state.players.filter(p=>scores[p.id]===minScore);
+      if(winners.length === 1){
+        const winner = winners[0];
+        const value = (state.holeDoubleBy === winner.id) ? state.skinPool*2 : state.skinPool;
+        winner.skins += value;
+        logEvent(`🏆 ${winner.name} gana ${value} skin${value===1?'':'s'} en el Hoyo ${holeNum}.`);
+        state.skinPool = 1;
+        state.players.filter(p=>p.id!==winner.id).forEach(p=>drawCardFor(p));
+      } else {
+        state.skinPool += 1;
+        logEvent(`🤝 Empate en el Hoyo ${holeNum} — nadie gana skin. Se acumula para el siguiente (ahora vale ${state.skinPool}).`);
+      }
+      if(state.pressionActive){
+        const maxScore = Math.max(...state.players.map(p=>scores[p.id]));
+        const worstPlayers = state.players.filter(p=>scores[p.id]===maxScore);
+        if(worstPlayers.length===1 && worstPlayers[0].hand.length>0){
+          const wp = worstPlayers[0];
+          const idx = Math.floor(Math.random()*wp.hand.length);
+          const dropped = wp.hand.splice(idx,1)[0];
+          state.discard.push(dropped);
+          logEvent(`🔥 Presión: ${wp.name} tuvo el peor resultado del hoyo y perdió una carta.`);
+        }
+      }
+    }
 
     const swapActiveThisHole = bs.swapActive; // companions using each other's discs THIS hole
     bs.swapActive = null;
@@ -270,9 +308,11 @@
       const pa = state.players.find(p=>p.id===ev.a);
       const pb = state.players.find(p=>p.id===ev.b);
       ev.victim = (ev.aScore <= ev.bScore) ? ev.a : ev.b; // quien tenía el mejor resultado pierde
+      checkShield(ev);
       playSiren();
     } else if(ev.type === "glitch_lider"){
       ev.victim = ev.best; // quien tenía el mejor resultado del hoyo pierde
+      checkShield(ev);
       playSiren();
     } else if(ev.type === "swap_single" || ev.type === "swap_tie"){
       playChime();
@@ -286,6 +326,16 @@
 
   function logEvent(text){
     state.fullLog.push({block: state.block, hole: currentHoleNumber(), text});
+  }
+
+  function checkShield(ev){
+    if(!state.skinsMode) return;
+    const victimPlayer = state.players.find(p=>p.id===ev.victim);
+    if(victimPlayer && victimPlayer.shielded){
+      victimPlayer.shielded = false;
+      ev.shieldBlocked = true;
+      logEvent(`🛡️ El Escudo de ${victimPlayer.name} bloqueó el castigo de este hoyo.`);
+    }
   }
 
   function applyRoboEffect(ev){
@@ -350,6 +400,15 @@
     state.blockState.swapActive = state.blockState.swapNextHole;
     state.blockState.swapNextHole = null;
 
+    // reset de banderas del modo Skins Chaos para el siguiente hoyo
+    if(state.skinsMode){
+      state.cardsPlayedThisHole = [];
+      state.cardTargetsHitThisHole = [];
+      state.holeDoubleBy = null;
+      state.pressionActive = false;
+      state.players.forEach(p => p.immuneThisHole = false);
+    }
+
     if(currentPosition() >= 9){
       // block finished
       state.finalBlockDone[state.block] = true;
@@ -394,6 +453,7 @@
     if(state.screen === "setup") html += renderSetup();
     else if(state.screen === "pars") html += renderPars();
     else if(state.screen === "reveal") html += renderReveal();
+    else if(state.screen === "cards") html += renderCards();
     else if(state.screen === "scoring") html += renderScoring();
     else if(state.screen === "leaderboardBlock") html += renderBlockLeaderboard();
     else if(state.screen === "finalBoard") html += renderFinalBoard();
@@ -437,6 +497,13 @@
         <div class="card">
           ${rows}
           <button class="btn-ghost" id="addPlayer">+ Agregar jugador</button>
+        </div>
+        <div class="card" style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
+          <div>
+            <div style="font-weight:700;font-size:14px;">🃏 Modo Skins Chaos</div>
+            <div class="sub" style="margin:2px 0 0;font-size:12px;">Skins acumulables + mazo de cartas con efectos. Opcional.</div>
+          </div>
+          <button class="mode-toggle ${state.skinsMode?'selected':''}" id="toggleSkinsMode">${state.skinsMode?'ON':'OFF'}</button>
         </div>
       </div>
       <footer class="bottombar">
@@ -489,9 +556,152 @@
         <p class="center-note">Siguiente destino del shuffle. Caminen al hoyo ${holeNum}.</p>
       </div>
       <footer class="bottombar">
+        ${state.skinsMode ? `<button class="btn-ghost" id="toCards" style="margin-bottom:10px;">🃏 Jugar cartas (opcional)</button>` : ""}
         <button class="btn-primary" id="toScoring">Jugar este hoyo</button>
       </footer>
     `;
+  }
+
+  function renderCards(){
+    const skinLabel = state.skinPool > 1 ? `${state.skinPool} skins acumulados` : "1 skin";
+    const playersHtml = state.players.map(p=>{
+      const played = state.cardsPlayedThisHole.includes(p.id);
+      const cardsHtml = p.hand.length
+        ? p.hand.map((cid,idx)=>{
+            const def = CARD_DEFS[cid];
+            return `<button class="hand-card" data-pid="${p.id}" data-idx="${idx}" ${played?'disabled':''}>
+              <span class="hc-name">${def.name}</span>
+              <span class="hc-desc">${def.desc}</span>
+            </button>`;
+          }).join("")
+        : `<p class="center-note" style="margin:6px 0;">Sin cartas en mano.</p>`;
+      return `
+        <div class="card">
+          <div class="eyebrow" style="display:flex;justify-content:space-between;">
+            <span>${p.name} · 🏆${p.skins}</span>
+            <span>${played ? "✅ jugó carta" : `${p.hand.length} carta${p.hand.length===1?'':'s'}`}</span>
+          </div>
+          <div class="hand-grid">${cardsHtml}</div>
+        </div>`;
+    }).join("");
+
+    return `
+      <div class="screen">
+        <div class="eyebrow">Antes de jugar el hoyo</div>
+        <h1 class="title">🃏 Mesa de cartas</h1>
+        <p class="sub">Skin en juego este hoyo: <b>${skinLabel}</b>. Cada jugador puede jugar máximo 1 carta por hoyo.</p>
+        ${playersHtml}
+      </div>
+      <footer class="bottombar">
+        <button class="btn-primary" id="backFromCards">Continuar a capturar tiros</button>
+      </footer>
+    `;
+  }
+
+  function drawCardFor(player){
+    if(state.deck.length === 0){
+      if(state.discard.length === 0) return; // mazo y descarte vacíos, no hay más cartas
+      state.deck = shuffle(state.discard);
+      state.discard = [];
+    }
+    const c = state.deck.pop();
+    if(c) player.hand.push(c);
+    while(player.hand.length > 5){
+      const dropped = player.hand.shift(); // descarta la más vieja si se pasa del límite
+      state.discard.push(dropped);
+    }
+  }
+
+  function promptCardTarget(playerId, handIdx, def){
+    const options = state.players.filter(p=>p.id!==playerId);
+    const overlay = document.createElement("div");
+    overlay.className = "glitch-overlay flash-info";
+    overlay.innerHTML = `
+      <div class="glitch-card">
+        <div class="glitch-siren">🃏</div>
+        <div class="glitch-title" style="color:var(--cyan);animation:none;">${def.name}</div>
+        <div class="glitch-desc">${def.desc}<br>¿A quién le juegas esta carta?</div>
+        <select class="pick" id="cardTargetPick">${options.map(o=>`<option value="${o.id}">${o.name}</option>`).join("")}</select>
+        <button class="btn-primary" id="confirmCardTarget" style="margin-top:14px;">Jugar carta</button>
+        <button class="btn-ghost" id="cancelCardTarget" style="margin-top:8px;">Cancelar</button>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    document.getElementById("confirmCardTarget").addEventListener("click", ()=>{
+      const targetId = document.getElementById("cardTargetPick").value;
+      document.body.removeChild(overlay);
+      playCard(playerId, handIdx, targetId);
+    });
+    document.getElementById("cancelCardTarget").addEventListener("click", ()=>{
+      document.body.removeChild(overlay);
+    });
+  }
+
+  function playCard(playerId, handIdx, targetId){
+    const player = state.players.find(p=>p.id===playerId);
+    if(!player || state.cardsPlayedThisHole.includes(playerId)) return;
+    const cardId = player.hand[handIdx];
+    if(!cardId) return;
+    const def = CARD_DEFS[cardId];
+    const target = targetId ? state.players.find(p=>p.id===targetId) : null;
+
+    if(target && target.immuneThisHole){
+      logEvent(`🚫 ${target.name} tenía Veto activo — la carta ${def.name} de ${player.name} no tuvo efecto.`);
+      player.hand.splice(handIdx,1);
+      state.discard.push(cardId);
+      state.cardsPlayedThisHole.push(playerId);
+      render();
+      return;
+    }
+
+    applyCardEffect(cardId, player, target);
+
+    player.hand.splice(handIdx,1);
+    state.discard.push(cardId);
+    state.cardsPlayedThisHole.push(playerId);
+    if(target) state.cardTargetsHitThisHole.push(target.id);
+    if(cardId !== "carta_espejo") state.lastPlayedCard = {cardId, byPlayerId: playerId};
+    render();
+  }
+
+  function applyCardEffect(cardId, player, target){
+    const def = CARD_DEFS[cardId];
+    if(cardId === "escudo"){
+      player.shielded = true;
+      logEvent(`🛡️ ${player.name} jugó Escudo — queda protegido del próximo Robo/Glitch.`);
+    } else if(cardId === "ojo_halcon"){
+      if(target){ target.saveBlocked = true; logEvent(`🎯 ${player.name} jugó Ojo de Halcón contra ${target.name} — le anula su "salvarme".`); }
+    } else if(cardId === "doble_nada"){
+      state.holeDoubleBy = player.id;
+      logEvent(`🎲 ${player.name} jugó Doble o Nada — si gana el skin de este hoyo, se duplica.`);
+    } else if(cardId === "robo_carta"){
+      if(target && target.hand.length){
+        const idx = Math.floor(Math.random()*target.hand.length);
+        const stolen = target.hand.splice(idx,1)[0];
+        player.hand.push(stolen);
+        logEvent(`🎁 ${player.name} le robó una carta a ${target.name}.`);
+      } else if(target){
+        logEvent(`🎁 ${player.name} intentó robarle carta a ${target.name}, pero no tenía ninguna.`);
+      }
+    } else if(cardId === "presion"){
+      state.pressionActive = true;
+      logEvent(`🔥 ${player.name} jugó Presión — el peor resultado de este hoyo pierde una carta al azar.`);
+    } else if(cardId === "veto"){
+      player.immuneThisHole = true;
+      logEvent(`🚫 ${player.name} jugó Veto — nadie puede jugarle cartas este hoyo.`);
+    } else if(cardId === "carta_espejo"){
+      if(state.lastPlayedCard){
+        const mirroredId = state.lastPlayedCard.cardId;
+        logEvent(`👻 ${player.name} jugó Carta Espejo, copiando ${CARD_DEFS[mirroredId].name}.`);
+        applyCardEffect(mirroredId, player, target);
+      } else {
+        logEvent(`👻 ${player.name} jugó Carta Espejo, pero no había ninguna carta previa que copiar.`);
+      }
+    } else if(def.kind === "physical"){
+      // Cartas de instrucción física: el sistema solo anuncia, el grupo la ejecuta.
+      const targetTxt = target ? ` (afecta a ${target.name})` : "";
+      logEvent(`${def.name}: ${player.name} la jugó${targetTxt}. ${def.desc}`);
+    }
   }
 
   function renderScoring(){
@@ -560,12 +770,17 @@
   }
 
   function renderFinalBoard(){
-    const sorted = state.players.slice().sort((a,b)=>a.total-b.total);
-    const winner = sorted[0];
+    const sortedByScore = state.players.slice().sort((a,b)=>a.total-b.total);
+    const winner = state.skinsMode
+      ? state.players.slice().sort((a,b)=>b.skins-a.skins)[0]
+      : sortedByScore[0];
+    const winnerLine = state.skinsMode
+      ? `🏆 ${winner.name} gana con ${winner.skins} skin${winner.skins===1?'':'s'}`
+      : `🏆 ${winner.name} se lleva la card`;
     return `
       <div class="screen">
         <div class="eyebrow">Ronda completa · 18 hoyos</div>
-        <h1 class="title">🏆 ${winner.name} se lleva la card</h1>
+        <h1 class="title">${winnerLine}</h1>
         ${renderScoreboardCard()}
         <button class="btn-ghost" id="toScorecard" style="margin-bottom:14px;">📋 Ver tarjeta completa</button>
       </div>
@@ -644,7 +859,7 @@
     const sorted = state.players.slice().sort((a,b)=>a.total-b.total);
     const rows = sorted.map((p,i)=>`
       <div class="sb-row">
-        <div class="sb-name"><span class="sb-rank">${i+1}</span>${p.name}</div>
+        <div class="sb-name"><span class="sb-rank">${i+1}</span>${p.name}${state.skinsMode?` <span class="mono" style="color:var(--amber);font-size:11px;">🏆${p.skins}</span>`:""}</div>
         <div class="sb-score ${scoreClass(p.total)} mono">${p.total>0?'+':''}${p.total}</div>
       </div>`).join("");
     return `<div class="scoreboard">${rows}</div>`;
@@ -705,10 +920,25 @@
       desc = getEventMessage("forced_none", {});
     }
 
+    // Si el Escudo (modo Skins Chaos) ya bloqueó el castigo, se muestra un mensaje especial
+    // y ya no hay nada que aplicar ni oportunidad de "salvarme" (no hace falta).
+    if(ev.shieldBlocked){
+      const victimPlayer = state.players.find(p=>p.id===ev.victim);
+      title = "🛡️ ¡ESCUDO ACTIVADO!";
+      desc = `${victimPlayer ? `<b>${victimPlayer.name}</b> tenía Escudo activo` : "El jugador tenía Escudo activo"} y bloqueó el castigo de este hoyo por completo.`;
+      cta = "Continuar";
+      punishing = false;
+    }
+
     const victim = victimId ? state.players.find(p=>p.id===victimId) : null;
-    const canSave = punishing && victim && !victim.usedSave;
+    let canSave = punishing && victim && !victim.usedSave;
+    if(canSave && victim.saveBlocked){
+      canSave = false;
+      victim.saveBlocked = false; // se consume el bloqueo de Ojo de Halcón, solo una vez
+    }
 
     function applyThePunishment(){
+      if(ev.shieldBlocked) return; // el Escudo ya lo anuló, no hay nada que aplicar
       if(ev.type === "robo") applyRoboEffect(ev);
       else if(ev.type === "glitch_lider") applyGlitchLiderEffect(ev);
       else if(ev.type === "forced_apply_confirm") applyForcedRoboEffect(ev.birdie, ev.companion);
@@ -793,7 +1023,7 @@
   function attachHandlers(){
     const addBtn = document.getElementById("addPlayer");
     if(addBtn) addBtn.addEventListener("click", ()=>{
-      state.players.push({id:uid(), name:"", total:0, holes:[], usedSave:false});
+      state.players.push({id:uid(), name:"", total:0, holes:[], usedSave:false, hand:[], skins:0, shielded:false, saveBlocked:false, immuneThisHole:false});
       render();
     });
     document.querySelectorAll("[data-pidx]").forEach(inp=>{
@@ -817,6 +1047,12 @@
       render();
     });
 
+    const toggleSkinsMode = document.getElementById("toggleSkinsMode");
+    if(toggleSkinsMode) toggleSkinsMode.addEventListener("click", ()=>{
+      state.skinsMode = !state.skinsMode;
+      render();
+    });
+
     document.querySelectorAll(".par-opt").forEach(btn=>{
       btn.addEventListener("click", (e)=>{
         const h = +e.currentTarget.dataset.hole;
@@ -828,11 +1064,44 @@
 
     const startRound = document.getElementById("startRound");
     if(startRound) startRound.addEventListener("click", ()=>{
+      if(state.skinsMode && !state.skinsInitialized){
+        state.deck = buildShuffledDeck(3); // 3 copias de cada una de las 12 cartas = 36
+        state.discard = [];
+        state.players.forEach(p=>{
+          p.hand = [];
+          for(let i=0;i<3;i++){ const c = state.deck.pop(); if(c) p.hand.push(c); }
+        });
+        state.skinsInitialized = true;
+      }
       startBlock("front");
     });
 
     const toScoring = document.getElementById("toScoring");
     if(toScoring) toScoring.addEventListener("click", goToScoring);
+
+    const toCards = document.getElementById("toCards");
+    if(toCards) toCards.addEventListener("click", ()=>{
+      state.screen = "cards";
+      render();
+    });
+
+    const backFromCards = document.getElementById("backFromCards");
+    if(backFromCards) backFromCards.addEventListener("click", goToScoring);
+
+    document.querySelectorAll(".hand-card").forEach(btn=>{
+      btn.addEventListener("click", (e)=>{
+        const pid = e.currentTarget.dataset.pid;
+        const idx = +e.currentTarget.dataset.idx;
+        const player = state.players.find(p=>p.id===pid);
+        const cardId = player.hand[idx];
+        const def = CARD_DEFS[cardId];
+        if(def.needsTarget){
+          promptCardTarget(pid, idx, def);
+        } else {
+          playCard(pid, idx, null);
+        }
+      });
+    });
 
     document.querySelectorAll(".score-btn").forEach(btn=>{
       btn.addEventListener("click", (e)=>{
@@ -913,10 +1182,13 @@
     for(let h=1;h<=18;h++){ freshPars[h] = 3; }
     return {
       screen:"setup", prevScreen:"leaderboardBlock",
-      players:[0,1,2,3].map(()=>({id:uid(), name:"", total:0, holes:[], usedSave:false})),
+      players:[0,1,2,3].map(()=>({id:uid(), name:"", total:0, holes:[], usedSave:false, hand:[], skins:0, shielded:false, saveBlocked:false, immuneThisHole:false})),
       pars:freshPars, block:null, blockOrder:[], blockIndex:0, blockState:null, playOrder:{front:[], back:[]},
       holeScores:{}, pendingEvent:null, fullLog:[], log:[], showLog:false, revealAnimating:false,
       finalBlockDone:{front:false, back:false},
+      skinsMode:false, skinsInitialized:false, deck:[], discard:[], skinPool:1,
+      holeDoubleBy:null, pressionActive:false, lastPlayedCard:null,
+      cardsPlayedThisHole:[], cardTargetsHitThisHole:[],
     };
   }
 
