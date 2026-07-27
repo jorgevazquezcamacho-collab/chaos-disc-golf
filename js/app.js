@@ -108,6 +108,21 @@
     try{ localStorage.removeItem(STORAGE_KEY); }catch(e){}
   }
 
+  // ---------- Perfil local ("¿quién soy yo en este celular?") ----------
+  const PROFILE_KEY = "chaosDiscGolfProfile_v1";
+
+  function loadProfile(){
+    try{
+      const raw = localStorage.getItem(PROFILE_KEY);
+      return raw ? JSON.parse(raw) : null;
+    }catch(e){ return null; }
+  }
+
+  function saveProfile(profile){
+    try{ localStorage.setItem(PROFILE_KEY, JSON.stringify(profile)); }
+    catch(e){ /* si falla, simplemente no persiste */ }
+  }
+
   function shuffle(arr){
     const a = arr.slice();
     for(let i=a.length-1;i>0;i--){
@@ -527,6 +542,7 @@
     const rows = state.players.map((p,i)=>`
       <div class="add-row">
         <input class="name-input" data-pidx="${i}" value="${p.name}" placeholder="Jugador ${i+1}"/>
+        ${i===0 ? `<button class="btn-ghost" id="editProfileBtn" style="flex:0 0 auto;width:auto;white-space:nowrap;padding:8px 10px;font-size:11px;" title="Cambiar tu nombre guardado">👤 Tú</button>` : ""}
         <button class="btn-remove" data-remove="${i}">✕</button>
       </div>`).join("");
     return `
@@ -1175,6 +1191,12 @@
       state.players.push({id:uid(), name:"", total:0, holes:[], usedSave:false, hand:[], skins:0, shielded:false, saveBlocked:false, immuneThisHole:false});
       render();
     });
+
+    const editProfileBtn = document.getElementById("editProfileBtn");
+    if(editProfileBtn) editProfileBtn.addEventListener("click", ()=>{
+      showWelcomeProfilePrompt();
+    });
+
     document.querySelectorAll("[data-pidx]").forEach(inp=>{
       inp.addEventListener("input", (e)=>{
         state.players[+e.target.dataset.pidx].name = e.target.value;
@@ -1382,9 +1404,10 @@
   function freshDefaultState(){
     const freshPars = {};
     for(let h=1;h<=18;h++){ freshPars[h] = 3; }
+    const profile = loadProfile();
     return {
       screen:"setup", prevScreen:"leaderboardBlock",
-      players:[0,1,2,3].map(()=>({id:uid(), name:"", total:0, holes:[], usedSave:false, hand:[], skins:0, shielded:false, saveBlocked:false, immuneThisHole:false})),
+      players:[0,1,2,3].map((i)=>({id:uid(), name: (i===0 && profile) ? profile.name : "", total:0, holes:[], usedSave:false, hand:[], skins:0, shielded:false, saveBlocked:false, immuneThisHole:false})),
       pars:freshPars, block:null, blockOrder:[], blockIndex:0, blockState:null, playOrder:{front:[], back:[]},
       holeScores:{}, pendingEvent:null, fullLog:[], log:[], showLog:false, revealAnimating:false,
       finalBlockDone:{front:false, back:false},
@@ -1423,6 +1446,39 @@
     });
   }
 
+  function showWelcomeProfilePrompt(){
+    const existing = loadProfile();
+    const overlay = document.createElement("div");
+    overlay.className = "glitch-overlay flash-info";
+    overlay.innerHTML = `
+      <div class="glitch-card">
+        <div class="glitch-siren">👋</div>
+        <div class="glitch-title" style="color:var(--lime);animation:none;">${existing ? "CAMBIAR TU NOMBRE" : "¿CÓMO TE LLAMAS?"}</div>
+        <div class="glitch-desc">Así te vamos a reconocer en este celular — no hace falta contraseña, solo para no tener que escribir tu nombre cada partida.</div>
+        <input type="text" id="welcomeNameInput" class="name-input" placeholder="Tu nombre" value="${existing ? existing.name : ""}" style="margin-bottom:10px;"/>
+        <button class="btn-primary" id="welcomeNameConfirm">Listo</button>
+        <button class="btn-ghost" id="welcomeNameSkip" style="margin-top:8px;">${existing ? "Cancelar" : "Ahora no"}</button>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    const input = document.getElementById("welcomeNameInput");
+    input.focus();
+    function confirm(){
+      const name = input.value.trim();
+      if(name){
+        saveProfile({name});
+        if(state.players[0]) state.players[0].name = name;
+      }
+      document.body.removeChild(overlay);
+      render();
+    }
+    document.getElementById("welcomeNameConfirm").addEventListener("click", confirm);
+    input.addEventListener("keydown", (e)=>{ if(e.key === "Enter") confirm(); });
+    document.getElementById("welcomeNameSkip").addEventListener("click", ()=>{
+      document.body.removeChild(overlay);
+    });
+  }
+
   const saved = loadSavedState();
   if(saved && saved.players && saved.players.length && saved.screen && saved.screen !== "setup" && saved.screen !== "finalBoard"){
     pendingResumeDecision = true;
@@ -1433,4 +1489,7 @@
     state = freshDefaultState();
   }
   render();
+  if(!loadProfile() && !pendingResumeDecision){
+    showWelcomeProfilePrompt();
+  }
 })();
