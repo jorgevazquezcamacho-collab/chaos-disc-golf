@@ -84,6 +84,7 @@
     courseInfo: null, // {key, name, safetyNote, holes:{n:{par,distance,ob,image}}} si se cargó un campo guardado
     trajectoryOpen: false,
     manualReturnScreen: null,
+    settingsReturnScreen: null,
   };
 
   function uid(){ return Math.random().toString(36).slice(2,9); }
@@ -510,8 +511,9 @@
     else if(state.screen === "finalBoard") html += renderFinalBoard();
     else if(state.screen === "scorecard") html += renderScorecard();
     else if(state.screen === "manual") html += renderManual();
+    else if(state.screen === "settings") html += renderSettings();
     html += `</main>`;
-    if(state.screen !== "setup" && state.screen !== "scorecard" && state.screen !== "manual") html += renderScoreboardFooterToggle();
+    if(state.screen !== "setup" && state.screen !== "scorecard" && state.screen !== "manual" && state.screen !== "settings") html += renderScoreboardFooterToggle();
     app.innerHTML = html;
     attachHandlers();
     if(state.pendingEvent){
@@ -523,18 +525,14 @@
   function renderTopbar(){
     const frontActive = state.block === "front";
     const backActive = state.block === "back";
-    const showReset = !["setup","finalBoard"].includes(state.screen);
-    const showUndo = showReset && state.history && state.history.length > 0;
-    const showManualBtn = state.screen !== "manual";
+    const showSettings = !["finalBoard","settings"].includes(state.screen);
     return `
     <header class="topbar">
       <div class="brand"><span style="color:var(--text);">CHAOS</span> <span style="color:var(--lime);">DISC</span><span style="display:inline-flex;margin:0 -1px;">${basketLogo()}</span><span style="color:var(--lime);">GOLF</span></div>
       <div style="display:flex;gap:6px;align-items:center;">
         <div class="block-pill ${frontActive?'active':''}">FRONT 9</div>
         <div class="block-pill ${backActive?'active':''}">BACK 9</div>
-        ${showManualBtn ? `<button id="openManualBtn" class="reset-btn" title="Manual rápido">📖</button>` : ""}
-        ${showUndo ? `<button id="undoHoleBtn" class="reset-btn" title="Deshacer último hoyo">↩</button>` : ""}
-        ${showReset ? `<button id="resetRoundBtn" class="reset-btn" title="Reiniciar ronda">↺</button>` : ""}
+        ${showSettings ? `<button id="openSettingsBtn" class="reset-btn" title="Ajustes">⚙️</button>` : ""}
       </div>
     </header>`;
   }
@@ -882,6 +880,75 @@
     `;
   }
 
+  function buildShareText(){
+    const sortedByScore = state.players.slice().sort((a,b)=>a.total-b.total);
+    const chaosCupSorted = state.players.slice().sort((a,b)=>(a.total-a.handicap)-(b.total-b.handicap));
+    const lines = [];
+    lines.push("🥏 CHAOS DISC GOLF — Resultado");
+    lines.push("");
+
+    if(state.chaosCupMode){
+      const w = chaosCupSorted[0];
+      lines.push(`🏆 ${w.name} se lleva la Chaos Cup`);
+      lines.push("");
+      chaosCupSorted.forEach((p,i)=>{
+        const net = p.total - p.handicap;
+        lines.push(`${i+1}. ${p.name} — ${net>0?'+':''}${net} neto (${p.total>0?'+':''}${p.total} bruto, hcp ${p.handicap})`);
+      });
+    } else if(state.skinsMode){
+      const w = state.players.slice().sort((a,b)=>b.skins-a.skins)[0];
+      lines.push(`🏆 ${w.name} gana con ${w.skins} skin${w.skins===1?'':'s'}`);
+      lines.push("");
+      state.players.slice().sort((a,b)=>b.skins-a.skins).forEach((p,i)=>{
+        lines.push(`${i+1}. ${p.name} — ${p.skins} skin${p.skins===1?'':'s'} (${p.total>0?'+':''}${p.total})`);
+      });
+    } else {
+      const w = sortedByScore[0];
+      lines.push(`🏆 ${w.name} se lleva la card`);
+      lines.push("");
+      sortedByScore.forEach((p,i)=>{
+        lines.push(`${i+1}. ${p.name} — ${p.total>0?'+':''}${p.total}`);
+      });
+    }
+
+    const countOf = (needle) => state.fullLog.filter(l=>l.text.includes(needle)).length;
+    const highlights = [];
+    const robo = countOf("Robo de Identidad");
+    const glitch = countOf("Glitch del Líder");
+    const shuffle = countOf("Shuffle de Discos");
+    const zurdo = countOf("Putt Zurdo");
+    if(robo) highlights.push(`${robo} Robo${robo===1?'':'s'} de Identidad`);
+    if(glitch) highlights.push(`${glitch} Glitch${glitch===1?'':'es'} del Líder`);
+    if(shuffle) highlights.push(`${shuffle} Shuffle${shuffle===1?'':'s'} de Discos`);
+    if(zurdo) highlights.push(`${zurdo} Putt Zurdo`);
+    if(highlights.length){
+      lines.push("");
+      lines.push(`Eventos destacados: ${highlights.join(" · ")}`);
+    }
+
+    return lines.join("\n");
+  }
+
+  async function shareResults(){
+    const text = buildShareText();
+    const shareBtn = document.getElementById("shareResultsBtn");
+    if(navigator.share){
+      try{ await navigator.share({title:"Chaos Disc Golf", text}); return; }
+      catch(e){ /* usuario canceló o falló, seguimos al respaldo de copiar */ }
+    }
+    try{
+      await navigator.clipboard.writeText(text);
+      if(shareBtn){
+        const original = shareBtn.textContent;
+        shareBtn.textContent = "✅ Copiado — pégalo donde quieras";
+        setTimeout(()=>{ shareBtn.textContent = original; }, 2200);
+      }
+    }catch(e){
+      alert(text); // último respaldo si ni portapapeles ni share funcionan
+    }
+  }
+
+
   function renderFinalBoard(){
     const sortedByScore = state.players.slice().sort((a,b)=>a.total-b.total);
     const chaosCupSorted = state.players.slice().sort((a,b)=>(a.total-a.handicap)-(b.total-b.handicap));
@@ -921,6 +988,7 @@
         <h1 class="title">${state.chaosCupMode ? "🏆 " : ""}${winnerLine}</h1>
         ${chaosCupBoard}
         ${renderScoreboardCard()}
+        <button class="btn-ghost" id="shareResultsBtn" style="margin-bottom:10px;">📤 Compartir resultado</button>
         <button class="btn-ghost" id="toScorecard" style="margin-bottom:14px;">📋 Ver tarjeta completa</button>
       </div>
       <footer class="bottombar">
@@ -987,6 +1055,56 @@
       </footer>
     `;
   }
+
+  function renderSettings(){
+    const returnScreen = state.settingsReturnScreen || "setup";
+    const hasRound = !["setup","finalBoard"].includes(returnScreen);
+    const showUndo = hasRound && state.history && state.history.length > 0;
+    const profile = loadProfile();
+    return `
+      <div class="screen">
+        <div class="eyebrow">Ajustes</div>
+        <h1 class="title">⚙️ Ajustes</h1>
+
+        <div class="eyebrow" style="margin:16px 0 8px;">Cuenta</div>
+        <button class="settings-row" id="settingsEditProfile">
+          <div class="score-avatar" style="border-color:var(--lime);color:var(--lime);flex-shrink:0;">${((profile&&profile.name.trim()[0])||"?").toUpperCase()}</div>
+          <div style="flex:1;text-align:left;">
+            <div class="settings-row-title">${profile ? profile.name : "Configurar tu nombre"}</div>
+            <div class="settings-row-sub">Tu nombre en este celular</div>
+          </div>
+          <div class="settings-chevron">›</div>
+        </button>
+
+        <div class="eyebrow" style="margin:16px 0 8px;">Ayuda</div>
+        <button class="settings-row" id="settingsOpenManual">
+          <div class="settings-icon">📖</div>
+          <div style="flex:1;text-align:left;" class="settings-row-title">Manual rápido</div>
+          <div class="settings-chevron">›</div>
+        </button>
+
+        ${(showUndo || hasRound) ? `<div class="eyebrow" style="margin:16px 0 8px;">Ronda actual</div>` : ""}
+        ${showUndo ? `
+        <button class="settings-row" id="settingsUndo">
+          <div class="settings-icon">↩️</div>
+          <div style="flex:1;text-align:left;" class="settings-row-title">Deshacer último hoyo</div>
+          <div class="settings-chevron">›</div>
+        </button>` : ""}
+        ${hasRound ? `
+        <button class="settings-row danger" id="settingsReset">
+          <div class="settings-icon">↺</div>
+          <div style="flex:1;text-align:left;" class="settings-row-title" style="color:var(--red);">Reiniciar ronda</div>
+          <div class="settings-chevron" style="color:var(--red);">›</div>
+        </button>` : ""}
+
+        <p class="center-note" style="margin-top:20px;">Chaos Disc Golf</p>
+      </div>
+      <footer class="bottombar">
+        <button class="btn-primary" id="backFromSettings">Regresar</button>
+      </footer>
+    `;
+  }
+
 
   function renderManual(){
     const discCards = DISC_TYPES.map(d => `
@@ -1066,8 +1184,50 @@
     return `<div style="padding:0 20px 130px;">${renderScoreboardCard()}</div>`;
   }
 
+  const GATED_EVENT_TYPES = ["robo","glitch_lider","swap_single","swap_tie","forced_swap_robo","putt_zurdo"];
+  const GATED_EVENT_NAMES = {
+    robo: "🚨 Robo de Identidad",
+    glitch_lider: "🚨 Glitch del Líder",
+    swap_single: "🔄 Shuffle de Discos",
+    swap_tie: "🔄 Shuffle de Discos (empate)",
+    forced_swap_robo: "🚨 Hoyo Forzado",
+    putt_zurdo: "🖐️ Putt Zurdo",
+  };
+
+  function renderEventGate(ev){
+    const name = GATED_EVENT_NAMES[ev.type] || "Evento Chaos";
+    const overlay = document.createElement("div");
+    overlay.className = "glitch-overlay";
+    overlay.innerHTML = `
+      <div class="glitch-card">
+        <div class="glitch-siren">🎲</div>
+        <div class="glitch-title" style="color:var(--cyan);animation:none;">${name}</div>
+        <div class="glitch-desc">Se activó esta regla. ¿La juegan esta vez, o la omiten y siguen con el hoyo normal (estilo PDGA)?</div>
+        <button class="btn-primary" id="gatePlayBtn" style="margin-bottom:8px;">▶️ Jugar</button>
+        <button class="btn-ghost" id="gateSkipBtn">⏭️ Omitir</button>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    document.getElementById("gatePlayBtn").addEventListener("click", ()=>{
+      document.body.removeChild(overlay);
+      ev.confirmed = true;
+      render();
+    });
+    document.getElementById("gateSkipBtn").addEventListener("click", ()=>{
+      document.body.removeChild(overlay);
+      logEvent(`${name} se activó pero el grupo decidió omitirla este hoyo.`);
+      continueFromEvent();
+    });
+  }
+
   function renderGlitchOverlay(){
     const ev = state.pendingEvent;
+
+    if(GATED_EVENT_TYPES.includes(ev.type) && !ev.confirmed && !ev.shieldBlocked){
+      renderEventGate(ev);
+      return;
+    }
+
     let title = "", desc = "", cta = "Continuar";
     let bodyExtra = "";
     let punishing = false; // true = este evento aplica un castigo real (elegible para "salvarme")
@@ -1396,6 +1556,9 @@
       render();
     });
 
+    const shareResultsBtn = document.getElementById("shareResultsBtn");
+    if(shareResultsBtn) shareResultsBtn.addEventListener("click", shareResults);
+
     const backFromScorecard = document.getElementById("backFromScorecard");
     if(backFromScorecard) backFromScorecard.addEventListener("click", ()=>{
       state.screen = state.prevScreen || "leaderboardBlock";
@@ -1420,14 +1583,39 @@
       resetToNewRound();
     });
 
-    const resetRoundBtn = document.getElementById("resetRoundBtn");
-    if(resetRoundBtn) resetRoundBtn.addEventListener("click", ()=>{
-      showResetConfirm();
+    const openSettingsBtn = document.getElementById("openSettingsBtn");
+    if(openSettingsBtn) openSettingsBtn.addEventListener("click", ()=>{
+      state.settingsReturnScreen = state.screen;
+      state.screen = "settings";
+      render();
     });
 
-    const undoHoleBtn = document.getElementById("undoHoleBtn");
-    if(undoHoleBtn) undoHoleBtn.addEventListener("click", ()=>{
+    const backFromSettings = document.getElementById("backFromSettings");
+    if(backFromSettings) backFromSettings.addEventListener("click", ()=>{
+      state.screen = state.settingsReturnScreen || "setup";
+      render();
+    });
+
+    const settingsEditProfile = document.getElementById("settingsEditProfile");
+    if(settingsEditProfile) settingsEditProfile.addEventListener("click", ()=>{
+      showWelcomeProfilePrompt();
+    });
+
+    const settingsOpenManual = document.getElementById("settingsOpenManual");
+    if(settingsOpenManual) settingsOpenManual.addEventListener("click", ()=>{
+      state.manualReturnScreen = "settings";
+      state.screen = "manual";
+      render();
+    });
+
+    const settingsUndo = document.getElementById("settingsUndo");
+    if(settingsUndo) settingsUndo.addEventListener("click", ()=>{
       undoLastHole();
+    });
+
+    const settingsReset = document.getElementById("settingsReset");
+    if(settingsReset) settingsReset.addEventListener("click", ()=>{
+      showResetConfirm();
     });
   }
 
@@ -1489,7 +1677,7 @@
       finalBlockDone:{front:false, back:false},
       skinsMode:false, chaosCupMode:false, skinsInitialized:false, deck:[], discard:[], skinPool:1,
       holeDoubleBy:null, pressionActive:false, lastPlayedCard:null,
-      cardsPlayedThisHole:[], cardTargetsHitThisHole:[], history:[], courseInfo:null, trajectoryOpen:false, manualReturnScreen:null,
+      cardsPlayedThisHole:[], cardTargetsHitThisHole:[], history:[], courseInfo:null, trajectoryOpen:false, manualReturnScreen:null, settingsReturnScreen:null,
     };
   }
 

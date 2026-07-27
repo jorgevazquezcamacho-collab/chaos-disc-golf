@@ -228,3 +228,15 @@
     border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-top:8px;font-size:14px;
   }
   .putt-zurdo-check input{width:18px;height:18px;accent-color:var(--lime);}
+
+  /* Ajustes — filas de menú tipo lista agrupada */
+  .settings-row{
+    width:100%;display:flex;align-items:center;gap:12px;background:var(--bg-panel);
+    border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-bottom:8px;
+    color:var(--text);text-align:left;
+  }
+  .settings-row-title{color:var(--text);font-size:14px;font-weight:600;}
+  .settings-row-sub{color:var(--text-dim);font-size:11px;margin-top:2px;}
+  .settings-icon{font-size:18px;flex-shrink:0;width:24px;text-align:center;}
+  .settings-chevron{color:var(--text-dim);font-size:18px;flex-shrink:0;}
+  .settings-row.danger{border-color:rgba(255,92,92,.35);}
