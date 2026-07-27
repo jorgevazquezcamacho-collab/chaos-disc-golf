@@ -63,6 +63,11 @@
 
   .add-row{display:flex;gap:8px;align-items:center;margin-bottom:4px;}
   .add-row input{flex:1;margin-bottom:0;}
+  .handicap-input{
+    flex:0 0 auto !important;width:48px;text-align:center;background:var(--bg-panel-2);
+    border:1px solid var(--line);color:var(--amber);font-family:'Space Mono',monospace;
+    font-size:13px;font-weight:700;border-radius:8px;padding:8px 4px;
+  }
 
   /* Hole reveal screen */
   .reveal-wrap{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 0 20px;text-align:center;}
@@ -105,6 +110,7 @@
   }
   .score-chip.selected{background:var(--lime);border-color:var(--lime);color:#0A0D12;font-weight:700;}
   .score-chip.selected.bad{background:var(--amber);border-color:var(--amber);color:#0A0D12;}
+  .score-row-compact.missing{border-color:var(--red);}
 
   /* Banners / events */
   .banner{border-radius:14px;padding:14px 16px;margin-bottom:14px;border:1px solid var(--line);}
@@ -112,6 +118,9 @@
   .banner.info .btitle{color:var(--cyan);}
   .banner .btitle{font-family:'Space Mono',monospace;font-size:12px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px;font-weight:700;}
   .banner .btext{font-size:13px;color:var(--text-dim);line-height:1.5;}
+  .banner.missing-warning{background:rgba(255,92,92,.12);border-color:var(--red);margin-bottom:10px;}
+  .banner.missing-warning .btext{color:var(--red);font-weight:600;}
+  .banner.missing-warning .btext b{color:var(--red);}
 
   select.pick{
     width:100%;background:var(--bg-panel-2);border:1px solid var(--line);color:var(--text);

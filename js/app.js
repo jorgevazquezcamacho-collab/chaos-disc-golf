@@ -71,6 +71,7 @@
     finalBlockDone: {front:false, back:false},
     // ---- Modo Skins Chaos (opcional) ----
     skinsMode: false,
+    chaosCupMode: false,
     skinsInitialized: false,
     deck: [], discard: [],
     skinPool: 1,
@@ -543,6 +544,7 @@
       <div class="add-row">
         <input class="name-input" data-pidx="${i}" value="${p.name}" placeholder="Jugador ${i+1}"/>
         ${i===0 ? `<button class="btn-ghost" id="editProfileBtn" style="flex:0 0 auto;width:auto;white-space:nowrap;padding:8px 10px;font-size:11px;" title="Cambiar tu nombre guardado">👤 Tú</button>` : ""}
+        ${state.chaosCupMode ? `<input type="number" class="handicap-input" data-hcidx="${i}" value="${p.handicap}" title="Handicap"/>` : ""}
         <button class="btn-remove" data-remove="${i}">✕</button>
       </div>`).join("");
     return `
@@ -560,6 +562,16 @@
             <div class="sub" style="margin:2px 0 0;font-size:12px;">Skins acumulables + mazo de cartas con efectos. Opcional.</div>
           </div>
           <button class="mode-toggle ${state.skinsMode?'selected':''}" id="toggleSkinsMode">${state.skinsMode?'ON':'OFF'}</button>
+        </div>
+        <div class="card" style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <img src="assets/badges/chaos-cup-badge.png" alt="Chaos Cup" style="width:36px;height:36px;flex-shrink:0;"/>
+            <div>
+              <div style="font-weight:700;font-size:14px;">Chaos Cup</div>
+              <div class="sub" style="margin:2px 0 0;font-size:12px;">Ronda con handicap — gana el marcador neto, se lo lleva todo.</div>
+            </div>
+          </div>
+          <button class="mode-toggle ${state.chaosCupMode?'selected':''}" id="toggleChaosCupMode" style="flex-shrink:0;">${state.chaosCupMode?'ON':'OFF'}</button>
         </div>
       </div>
       <footer class="bottombar">
@@ -800,6 +812,7 @@
     const opts = scoreOptionsForPar(par);
     const rows = state.players.map((p,i)=>{
       const sel = state.holeScores[p.id]; // relative value
+      const missing = sel === null || sel === undefined;
       const color = PLAYER_AVATAR_COLORS[i % PLAYER_AVATAR_COLORS.length];
       const initial = (p.name.trim()[0] || "?").toUpperCase();
       const chips = opts.map(opt=>{
@@ -807,7 +820,7 @@
         const bad = opt.rel >= 1;
         return `<button class="score-chip ${isSel?'selected':''} ${isSel&&bad?'bad':''}" data-pid="${p.id}" data-rel="${opt.rel}">${opt.label}</button>`;
       }).join("");
-      return `<div class="score-row-compact">
+      return `<div class="score-row-compact ${missing?'missing':''}">
         <div class="score-avatar" style="border-color:${color};color:${color};">${initial}</div>
         <div class="score-pname-compact" title="${p.name}">${p.name}</div>
         <div class="score-chip-strip" data-pidstrip="${p.id}">${chips}</div>
@@ -825,6 +838,15 @@
       </div>`;
     }
 
+    const missingPlayers = state.players.filter(p=>{
+      const s = state.holeScores[p.id];
+      return s === null || s === undefined;
+    });
+    const missingBanner = missingPlayers.length ? `
+      <div class="banner missing-warning">
+        <div class="btext">⚠ Falta el resultado de: <b>${missingPlayers.map(p=>p.name).join(", ")}</b></div>
+      </div>` : "";
+
     return `
       <div class="screen">
         <div class="eyebrow">Hoyo ${holeNum} · Par ${par}</div>
@@ -834,6 +856,7 @@
         ${rows}
       </div>
       <footer class="bottombar">
+        ${missingBanner}
         <button class="btn-primary" id="saveHole" ${allScoresIn()?'':'disabled'}>Guardar hoyo</button>
       </footer>
     `;
@@ -861,16 +884,42 @@
 
   function renderFinalBoard(){
     const sortedByScore = state.players.slice().sort((a,b)=>a.total-b.total);
-    const winner = state.skinsMode
-      ? state.players.slice().sort((a,b)=>b.skins-a.skins)[0]
-      : sortedByScore[0];
-    const winnerLine = state.skinsMode
-      ? `🏆 ${winner.name} gana con ${winner.skins} skin${winner.skins===1?'':'s'}`
-      : `🏆 ${winner.name} se lleva la card`;
+    const chaosCupSorted = state.players.slice().sort((a,b)=>(a.total-a.handicap)-(b.total-b.handicap));
+
+    let winner, winnerLine;
+    if(state.chaosCupMode){
+      winner = chaosCupSorted[0];
+      winnerLine = `${winner.name} se lleva la Chaos Cup`;
+    } else if(state.skinsMode){
+      winner = state.players.slice().sort((a,b)=>b.skins-a.skins)[0];
+      winnerLine = `🏆 ${winner.name} gana con ${winner.skins} skin${winner.skins===1?'':'s'}`;
+    } else {
+      winner = sortedByScore[0];
+      winnerLine = `🏆 ${winner.name} se lleva la card`;
+    }
+
+    const chaosCupBoard = state.chaosCupMode ? `
+      <div class="card" style="text-align:center;margin-bottom:14px;">
+        <img src="assets/badges/chaos-cup-badge.png" alt="Chaos Cup" style="width:110px;height:110px;margin:4px auto 10px;display:block;"/>
+        <div class="eyebrow" style="margin-bottom:10px;">Bruto vs. Neto (con handicap)</div>
+        ${chaosCupSorted.map((p,i)=>{
+          const net = p.total - p.handicap;
+          return `<div class="sb-row">
+            <div class="sb-name"><span class="sb-rank">${i+1}</span>${p.name} <span class="mono" style="color:var(--text-dim);font-size:10px;">(hcp ${p.handicap})</span></div>
+            <div class="mono" style="text-align:right;">
+              <span style="color:var(--text-dim);font-size:11px;">${p.total>0?'+':''}${p.total} bruto</span><br>
+              <span style="color:var(--lime);font-weight:700;">${net>0?'+':''}${net} neto</span>
+            </div>
+          </div>`;
+        }).join("")}
+      </div>
+    ` : "";
+
     return `
       <div class="screen">
         <div class="eyebrow">Ronda completa · 18 hoyos</div>
-        <h1 class="title">${winnerLine}</h1>
+        <h1 class="title">${state.chaosCupMode ? "🏆 " : ""}${winnerLine}</h1>
+        ${chaosCupBoard}
         ${renderScoreboardCard()}
         <button class="btn-ghost" id="toScorecard" style="margin-bottom:14px;">📋 Ver tarjeta completa</button>
       </div>
@@ -1188,7 +1237,7 @@
   function attachHandlers(){
     const addBtn = document.getElementById("addPlayer");
     if(addBtn) addBtn.addEventListener("click", ()=>{
-      state.players.push({id:uid(), name:"", total:0, holes:[], usedSave:false, hand:[], skins:0, shielded:false, saveBlocked:false, immuneThisHole:false});
+      state.players.push({id:uid(), name:"", total:0, holes:[], usedSave:false, hand:[], skins:0, shielded:false, saveBlocked:false, immuneThisHole:false, handicap:0});
       render();
     });
 
@@ -1199,9 +1248,24 @@
 
     document.querySelectorAll("[data-pidx]").forEach(inp=>{
       inp.addEventListener("input", (e)=>{
-        state.players[+e.target.dataset.pidx].name = e.target.value;
+        const idx = +e.target.dataset.pidx;
+        state.players[idx].name = e.target.value;
         const btn = document.getElementById("toPars");
         if(btn) btn.disabled = state.players.filter(p=>p.name.trim()).length < 2;
+        if(state.chaosCupMode){
+          const found = lookupChaosCupHandicap(e.target.value);
+          if(found !== null){
+            state.players[idx].handicap = found;
+            const hcInput = document.querySelector(`[data-hcidx="${idx}"]`);
+            if(hcInput) hcInput.value = found;
+          }
+        }
+      });
+    });
+    document.querySelectorAll("[data-hcidx]").forEach(inp=>{
+      inp.addEventListener("input", (e)=>{
+        const idx = +e.target.dataset.hcidx;
+        state.players[idx].handicap = +e.target.value || 0;
       });
     });
     document.querySelectorAll("[data-remove]").forEach(btn=>{
@@ -1221,6 +1285,18 @@
     const toggleSkinsMode = document.getElementById("toggleSkinsMode");
     if(toggleSkinsMode) toggleSkinsMode.addEventListener("click", ()=>{
       state.skinsMode = !state.skinsMode;
+      render();
+    });
+
+    const toggleChaosCupMode = document.getElementById("toggleChaosCupMode");
+    if(toggleChaosCupMode) toggleChaosCupMode.addEventListener("click", ()=>{
+      state.chaosCupMode = !state.chaosCupMode;
+      if(state.chaosCupMode){
+        state.players.forEach(p=>{
+          const found = lookupChaosCupHandicap(p.name);
+          if(found !== null) p.handicap = found;
+        });
+      }
       render();
     });
 
@@ -1407,11 +1483,11 @@
     const profile = loadProfile();
     return {
       screen:"setup", prevScreen:"leaderboardBlock",
-      players:[0,1,2,3].map((i)=>({id:uid(), name: (i===0 && profile) ? profile.name : "", total:0, holes:[], usedSave:false, hand:[], skins:0, shielded:false, saveBlocked:false, immuneThisHole:false})),
+      players:[0,1,2,3].map((i)=>({id:uid(), name: (i===0 && profile) ? profile.name : "", total:0, holes:[], usedSave:false, hand:[], skins:0, shielded:false, saveBlocked:false, immuneThisHole:false, handicap:0})),
       pars:freshPars, block:null, blockOrder:[], blockIndex:0, blockState:null, playOrder:{front:[], back:[]},
       holeScores:{}, pendingEvent:null, fullLog:[], log:[], showLog:false, revealAnimating:false,
       finalBlockDone:{front:false, back:false},
-      skinsMode:false, skinsInitialized:false, deck:[], discard:[], skinPool:1,
+      skinsMode:false, chaosCupMode:false, skinsInitialized:false, deck:[], discard:[], skinPool:1,
       holeDoubleBy:null, pressionActive:false, lastPlayedCard:null,
       cardsPlayedThisHole:[], cardTargetsHitThisHole:[], history:[], courseInfo:null, trajectoryOpen:false, manualReturnScreen:null,
     };
