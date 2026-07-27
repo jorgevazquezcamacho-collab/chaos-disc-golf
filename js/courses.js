@@ -44,6 +44,43 @@ function applyCoursePreset(state, presetKey){
 }
 
 // ---------------------------------------------------------------------
+// Sugerencia de tiro (disco + ángulo), derivada de distancia y OB.
+// Backhand/Forehand se deja abierto a propósito: ambos ángulos se
+// pueden tirar con cualquiera de las dos técnicas, así que no hay
+// forma confiable de derivarlo solo del OB.
+// ---------------------------------------------------------------------
+function suggestShot(holeInfo){
+  const isPrecisionHole = holeInfo.special && /isla/i.test(holeInfo.special);
+  const d = holeInfo.distance;
+
+  let disc;
+  if(isPrecisionHole){
+    disc = "Putter o Midrange (velocidad 2–5) — prioriza precisión, no potencia";
+  } else if(d <= 55){
+    disc = "Putter (velocidad 2–3)";
+  } else if(d <= 75){
+    disc = "Midrange (velocidad 4–5)";
+  } else if(d <= 95){
+    disc = "Fairway Driver (velocidad 6–8)";
+  } else {
+    disc = "Driver (velocidad 9+)";
+  }
+
+  let angle;
+  if(holeInfo.obSide === "left"){
+    angle = "Anhyzer o recto — evita curvar hacia la izquierda, ahí está el OB.";
+  } else if(holeInfo.obSide === "right"){
+    angle = "Hyzer o recto — evita curvar hacia la derecha, ahí está el OB.";
+  } else if(holeInfo.obSide === "behind"){
+    angle = "Recto, controlando la distancia — el OB está detrás de la canasta, no te pases.";
+  } else {
+    angle = "Recto / línea estable — sin OB marcado de un solo lado en este hoyo.";
+  }
+
+  return {disc, angle, brazo: "Backhand o Forehand — el que domines mejor para esa línea (esto no depende del OB)."};
+}
+
+// ---------------------------------------------------------------------
 // Diagrama ilustrado del hoyo (SVG generado, sin depender de imágenes)
 // ---------------------------------------------------------------------
 function holeDiagramSVG(holeNum, info){

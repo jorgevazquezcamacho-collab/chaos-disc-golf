@@ -82,6 +82,7 @@
     history: [], // snapshots para poder deshacer el último hoyo
     courseInfo: null, // {key, name, safetyNote, holes:{n:{par,distance,ob,image}}} si se cargó un campo guardado
     trajectoryOpen: false,
+    manualReturnScreen: null,
   };
 
   function uid(){ return Math.random().toString(36).slice(2,9); }
@@ -492,8 +493,9 @@
     else if(state.screen === "leaderboardBlock") html += renderBlockLeaderboard();
     else if(state.screen === "finalBoard") html += renderFinalBoard();
     else if(state.screen === "scorecard") html += renderScorecard();
+    else if(state.screen === "manual") html += renderManual();
     html += `</main>`;
-    if(state.screen !== "setup" && state.screen !== "scorecard") html += renderScoreboardFooterToggle();
+    if(state.screen !== "setup" && state.screen !== "scorecard" && state.screen !== "manual") html += renderScoreboardFooterToggle();
     app.innerHTML = html;
     attachHandlers();
     if(state.pendingEvent){
@@ -507,12 +509,14 @@
     const backActive = state.block === "back";
     const showReset = !["setup","finalBoard"].includes(state.screen);
     const showUndo = showReset && state.history && state.history.length > 0;
+    const showManualBtn = state.screen !== "manual";
     return `
     <header class="topbar">
       <div class="brand"><span style="color:var(--text);">CHAOS</span> <span style="color:var(--lime);">DISC</span><span style="display:inline-flex;margin:0 -1px;">${basketLogo()}</span><span style="color:var(--lime);">GOLF</span></div>
       <div style="display:flex;gap:6px;align-items:center;">
         <div class="block-pill ${frontActive?'active':''}">FRONT 9</div>
         <div class="block-pill ${backActive?'active':''}">BACK 9</div>
+        ${showManualBtn ? `<button id="openManualBtn" class="reset-btn" title="Manual rápido">📖</button>` : ""}
         ${showUndo ? `<button id="undoHoleBtn" class="reset-btn" title="Deshacer último hoyo">↩</button>` : ""}
         ${showReset ? `<button id="resetRoundBtn" class="reset-btn" title="Reiniciar ronda">↺</button>` : ""}
       </div>
@@ -595,6 +599,7 @@
     let trajectoryHtml = "";
     if(holeInfo){
       if(state.trajectoryOpen){
+        const shot = suggestShot(holeInfo);
         trajectoryHtml = `
           <div class="card" style="margin-top:16px;max-width:280px;margin-left:auto;margin-right:auto;">
             ${holeDiagramSVG(holeNum, holeInfo)}
@@ -602,6 +607,12 @@
             <p class="sub" style="margin:6px 0 0;"><b>Distancia:</b> ${holeInfo.distance}m</p>
             <p class="sub" style="margin:4px 0 0;"><b>OB:</b> ${holeInfo.ob}</p>
             ${holeInfo.special ? `<p class="sub" style="margin:6px 0 0;color:var(--amber);"><b>⚡ Regla especial:</b> ${holeInfo.special}</p>` : ""}
+            <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--line);">
+              <div class="eyebrow" style="margin-bottom:6px;color:var(--cyan);">🎯 Sugerencia de tiro</div>
+              <p class="sub" style="margin:4px 0;"><b>Disco:</b> ${shot.disc}</p>
+              <p class="sub" style="margin:4px 0;"><b>Ángulo:</b> ${shot.angle}</p>
+              <p class="sub" style="margin:4px 0;"><b>Brazo:</b> ${shot.brazo}</p>
+            </div>
           </div>`;
       }
     }
@@ -765,23 +776,25 @@
     }
   }
 
+  const PLAYER_AVATAR_COLORS = ["var(--lime)", "var(--cyan)", "var(--amber)", "var(--magenta)"];
+
   function renderScoring(){
     const holeNum = currentHoleNumber();
     const par = state.pars[holeNum];
     const opts = scoreOptionsForPar(par);
-    const rows = state.players.map(p=>{
+    const rows = state.players.map((p,i)=>{
       const sel = state.holeScores[p.id]; // relative value
-      const btns = opts.map(opt=>{
+      const color = PLAYER_AVATAR_COLORS[i % PLAYER_AVATAR_COLORS.length];
+      const initial = (p.name.trim()[0] || "?").toUpperCase();
+      const chips = opts.map(opt=>{
         const isSel = sel === opt.rel;
         const bad = opt.rel >= 1;
-        return `<button class="score-btn ${isSel?'selected':''} ${isSel&&bad?'bad':''}" data-pid="${p.id}" data-rel="${opt.rel}">
-          <span class="num">${opt.raw}</span>${opt.label}
-        </button>`;
+        return `<button class="score-chip ${isSel?'selected':''} ${isSel&&bad?'bad':''}" data-pid="${p.id}" data-rel="${opt.rel}">${opt.label}</button>`;
       }).join("");
-      return `<div class="player-score-row">
-        <div class="pname">${p.name}</div>
-        <div class="score-btns">${btns}</div>
-
+      return `<div class="score-row-compact">
+        <div class="score-avatar" style="border-color:${color};color:${color};">${initial}</div>
+        <div class="score-pname-compact" title="${p.name}">${p.name}</div>
+        <div class="score-chip-strip" data-pidstrip="${p.id}">${chips}</div>
       </div>`;
     }).join("");
 
@@ -800,7 +813,7 @@
       <div class="screen">
         <div class="eyebrow">Hoyo ${holeNum} · Par ${par}</div>
         <h1 class="title">Captura los tiros</h1>
-        <p class="sub">Toca el número de tiros reales de cada jugador — el sistema calcula solo el resultado.</p>
+        <p class="sub">Toca el resultado de cada jugador — el sistema calcula solo.</p>
         ${swapBanner}
         ${rows}
       </div>
@@ -906,6 +919,64 @@
       </div>
       <footer class="bottombar">
         <button class="btn-primary" id="backFromScorecard">Regresar</button>
+      </footer>
+    `;
+  }
+
+  function renderManual(){
+    const discCards = DISC_TYPES.map(d => `
+      <div class="card" style="border-left:3px solid ${d.color};">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;">
+          <div style="font-weight:700;font-size:15px;">${d.name}</div>
+          <div class="mono" style="color:${d.color};font-size:12px;">Velocidad ${d.speed}</div>
+        </div>
+        <p class="sub" style="margin:6px 0 0;">${d.desc}</p>
+      </div>`).join("");
+
+    return `
+      <div class="screen">
+        <div class="eyebrow">Para jugadores nuevos</div>
+        <h1 class="title">📖 Manual rápido</h1>
+        <p class="sub">Lo básico para entender qué disco usar y cómo leer un vuelo.</p>
+
+        <div class="card">
+          <div class="eyebrow" style="margin-bottom:10px;">🥏 Tipos de disco</div>
+        </div>
+        ${discCards}
+
+        <div class="card" style="margin-top:16px;">
+          <div class="eyebrow" style="margin-bottom:6px;">↩️ Hyzer vs Anhyzer</div>
+          <p class="sub">Es el ángulo con el que inclinas el disco al soltarlo — determina hacia dónde se curva (para diestro con lanzamiento backhand; se invierte para zurdo o forehand).</p>
+          ${hyzerAnhyzerSVG()}
+          <p class="sub" style="margin-top:8px;"><b style="color:var(--cyan);">Hyzer:</b> inclinas el borde de arriba del disco hacia tu cuerpo (izquierda) — el disco tiende a curvarse hacia la izquierda.</p>
+          <p class="sub" style="margin-top:4px;"><b style="color:var(--amber);">Anhyzer:</b> inclinas el borde de arriba lejos de tu cuerpo (derecha) — el disco tiende a curvarse hacia la derecha.</p>
+        </div>
+
+        <div class="card" style="margin-top:16px;">
+          <div class="eyebrow" style="margin-bottom:10px;">🔢 Cómo leer los números del disco</div>
+          <p class="sub" style="margin-bottom:12px;">Todo disco trae 4 números marcados (en el plástico o en la caja) — son su "ficha técnica" de vuelo:</p>
+          <div style="display:flex;gap:6px;justify-content:center;margin-bottom:14px;">
+            ${DISC_NUMBERS.map(n=>`
+              <div style="flex:1;text-align:center;background:var(--bg-panel-2);border:1px solid var(--line);border-radius:10px;padding:10px 4px;">
+                <div class="mono" style="font-size:22px;font-weight:700;color:${n.color};">${n.example}</div>
+                <div class="mono" style="font-size:9px;color:var(--text-dim);margin-top:2px;">${n.label}</div>
+              </div>`).join("")}
+          </div>
+          ${DISC_NUMBERS.map(n=>`
+            <p class="sub" style="margin-top:6px;"><b style="color:${n.color};">${n.label} (${n.range}):</b> ${n.desc}</p>`).join("")}
+        </div>
+
+        <div class="card" style="margin-top:16px;">
+          <div class="eyebrow" style="margin-bottom:6px;">🌀 Estabilidad del disco</div>
+          <p class="sub">Es la combinación de Giro + Caída — qué tanto resiste el disco el giro natural durante el vuelo.</p>
+          ${stabilitySVG()}
+          <p class="sub" style="margin-top:8px;"><b style="color:var(--lime);">Understable (inestable):</b> tiende a "turnear" hacia la derecha al final del vuelo. Fácil de controlar con poca potencia.</p>
+          <p class="sub" style="margin-top:4px;"><b style="color:var(--cyan);">Stable:</b> vuelo casi recto, con un fade leve a la izquierda al perder velocidad.</p>
+          <p class="sub" style="margin-top:4px;"><b style="color:var(--magenta);">Overstable:</b> resiste el giro y se va fuerte a la izquierda (fade) al final. Bueno contra el viento.</p>
+        </div>
+      </div>
+      <footer class="bottombar">
+        <button class="btn-primary" id="backFromManual">Regresar</button>
       </footer>
     `;
   }
@@ -1193,11 +1264,17 @@
       });
     });
 
-    document.querySelectorAll(".score-btn").forEach(btn=>{
+    document.querySelectorAll(".score-chip").forEach(btn=>{
       btn.addEventListener("click", (e)=>{
         const el = e.currentTarget;
         setScore(el.dataset.pid, +el.dataset.rel);
       });
+    });
+
+    // auto-scroll cada tira de chips para que el seleccionado quede visible
+    document.querySelectorAll(".score-chip-strip").forEach(strip=>{
+      const sel = strip.querySelector(".score-chip.selected");
+      if(sel) sel.scrollIntoView({inline:"center", block:"nearest"});
     });
 
     const saveHole = document.getElementById("saveHole");
@@ -1224,6 +1301,19 @@
     const backFromScorecard = document.getElementById("backFromScorecard");
     if(backFromScorecard) backFromScorecard.addEventListener("click", ()=>{
       state.screen = state.prevScreen || "leaderboardBlock";
+      render();
+    });
+
+    const openManualBtn = document.getElementById("openManualBtn");
+    if(openManualBtn) openManualBtn.addEventListener("click", ()=>{
+      state.manualReturnScreen = state.screen;
+      state.screen = "manual";
+      render();
+    });
+
+    const backFromManual = document.getElementById("backFromManual");
+    if(backFromManual) backFromManual.addEventListener("click", ()=>{
+      state.screen = state.manualReturnScreen || "setup";
       render();
     });
 
@@ -1300,7 +1390,7 @@
       finalBlockDone:{front:false, back:false},
       skinsMode:false, skinsInitialized:false, deck:[], discard:[], skinPool:1,
       holeDoubleBy:null, pressionActive:false, lastPlayedCard:null,
-      cardsPlayedThisHole:[], cardTargetsHitThisHole:[], history:[], courseInfo:null, trajectoryOpen:false,
+      cardsPlayedThisHole:[], cardTargetsHitThisHole:[], history:[], courseInfo:null, trajectoryOpen:false, manualReturnScreen:null,
     };
   }
 
