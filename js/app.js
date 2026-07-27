@@ -80,6 +80,8 @@
     cardsPlayedThisHole: [],  // playerIds que ya jugaron carta este hoyo
     cardTargetsHitThisHole: [], // playerIds que ya recibieron una carta en contra este hoyo
     history: [], // snapshots para poder deshacer el último hoyo
+    courseInfo: null, // {key, name, safetyNote, holes:{n:{par,distance,ob,image}}} si se cargó un campo guardado
+    trajectoryOpen: false,
   };
 
   function uid(){ return Math.random().toString(36).slice(2,9); }
@@ -422,6 +424,8 @@
   }
 
   function advanceAfterHole(){
+    state.trajectoryOpen = false;
+
     // apply any pending swap decided this hole to be active NEXT hole
     if(state._pendingSwapForNext){
       state.blockState.swapNextHole = state._pendingSwapForNext;
@@ -565,6 +569,13 @@
         <div class="eyebrow">Configurar campo</div>
         <h1 class="title">¿Qué hoyos son par 4?</h1>
         <p class="sub">Por default todos son par 3. Marca los que sean par 4 — así el sistema calcula Birdie/Bogey correcto sin importar el campo.</p>
+        <div class="card" style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
+          <div>
+            <div style="font-weight:700;font-size:14px;">📍 Los Colomos ${state.courseInfo && state.courseInfo.key==='los_colomos' ? '✅' : ''}</div>
+            <div class="sub" style="margin:2px 0 0;font-size:12px;">Carga los pares y el mapa de cada hoyo (Front 9 disponible).</div>
+          </div>
+          <button class="mode-toggle" id="loadLosColomos" style="flex:0 0 auto;">Cargar</button>
+        </div>
         ${holeBlock("Front 9", [1,2,3,4,5,6,7,8,9])}
         ${holeBlock("Back 9", [10,11,12,13,14,15,16,17,18])}
       </div>
@@ -579,6 +590,22 @@
     const pos = currentPosition();
     const par = state.pars[holeNum];
     const dots = state.blockOrder.map((h,i)=>`<div class="dot ${i<state.blockIndex? 'done':''}"></div>`).join("");
+    const holeInfo = state.courseInfo && state.courseInfo.holes[holeNum];
+
+    let trajectoryHtml = "";
+    if(holeInfo){
+      if(state.trajectoryOpen){
+        trajectoryHtml = `
+          <div class="card" style="margin-top:16px;max-width:280px;margin-left:auto;margin-right:auto;">
+            ${holeDiagramSVG(holeNum, holeInfo)}
+            <div class="eyebrow" style="margin-top:10px;">${state.courseInfo.name} · Hoyo ${holeNum}</div>
+            <p class="sub" style="margin:6px 0 0;"><b>Distancia:</b> ${holeInfo.distance}m</p>
+            <p class="sub" style="margin:4px 0 0;"><b>OB:</b> ${holeInfo.ob}</p>
+            ${holeInfo.special ? `<p class="sub" style="margin:6px 0 0;color:var(--amber);"><b>⚡ Regla especial:</b> ${holeInfo.special}</p>` : ""}
+          </div>`;
+      }
+    }
+
     return `
       <div class="screen reveal-wrap">
         <div class="reveal-label">Hoyo ${pos} de 9 · ${state.block==='front'?'Front':'Back'} 9</div>
@@ -586,6 +613,8 @@
         <div class="block-pill" style="margin-top:8px;">PAR ${par}</div>
         <div class="progress-dots">${dots}</div>
         <p class="center-note">Siguiente hoyo. Caminen al hoyo ${holeNum}.</p>
+        ${holeInfo ? `<button class="btn-ghost" id="toggleTrajectory" style="margin-top:6px;max-width:280px;">🗺️ ${state.trajectoryOpen?'Ocultar':'Ver'} trayecto del hoyo</button>` : ""}
+        ${trajectoryHtml}
       </div>
       <footer class="bottombar">
         ${state.skinsMode ? `<button class="btn-ghost" id="toCards" style="margin-bottom:10px;">🃏 Jugar cartas (opcional)</button>` : ""}
@@ -1102,6 +1131,12 @@
       render();
     });
 
+    const loadLosColomos = document.getElementById("loadLosColomos");
+    if(loadLosColomos) loadLosColomos.addEventListener("click", ()=>{
+      applyCoursePreset(state, "los_colomos");
+      render();
+    });
+
     document.querySelectorAll(".par-opt").forEach(btn=>{
       btn.addEventListener("click", (e)=>{
         const h = +e.currentTarget.dataset.hole;
@@ -1127,6 +1162,12 @@
 
     const toScoring = document.getElementById("toScoring");
     if(toScoring) toScoring.addEventListener("click", goToScoring);
+
+    const toggleTrajectory = document.getElementById("toggleTrajectory");
+    if(toggleTrajectory) toggleTrajectory.addEventListener("click", ()=>{
+      state.trajectoryOpen = !state.trajectoryOpen;
+      render();
+    });
 
     const toCards = document.getElementById("toCards");
     if(toCards) toCards.addEventListener("click", ()=>{
@@ -1259,7 +1300,7 @@
       finalBlockDone:{front:false, back:false},
       skinsMode:false, skinsInitialized:false, deck:[], discard:[], skinPool:1,
       holeDoubleBy:null, pressionActive:false, lastPlayedCard:null,
-      cardsPlayedThisHole:[], cardTargetsHitThisHole:[], history:[],
+      cardsPlayedThisHole:[], cardTargetsHitThisHole:[], history:[], courseInfo:null, trajectoryOpen:false,
     };
   }
 
