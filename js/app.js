@@ -85,6 +85,8 @@
     trajectoryOpen: false,
     manualReturnScreen: null,
     settingsReturnScreen: null,
+    historyReturnScreen: null,
+    historySaved: false,
   };
 
   function uid(){ return Math.random().toString(36).slice(2,9); }
@@ -512,8 +514,9 @@
     else if(state.screen === "scorecard") html += renderScorecard();
     else if(state.screen === "manual") html += renderManual();
     else if(state.screen === "settings") html += renderSettings();
+    else if(state.screen === "history") html += renderHistory();
     html += `</main>`;
-    if(state.screen !== "setup" && state.screen !== "scorecard" && state.screen !== "manual" && state.screen !== "settings") html += renderScoreboardFooterToggle();
+    if(state.screen !== "setup" && state.screen !== "scorecard" && state.screen !== "manual" && state.screen !== "settings" && state.screen !== "history") html += renderScoreboardFooterToggle();
     app.innerHTML = html;
     attachHandlers();
     if(state.pendingEvent){
@@ -535,6 +538,19 @@
         ${showSettings ? `<button id="openSettingsBtn" class="reset-btn" title="Ajustes">⚙️</button>` : ""}
       </div>
     </header>`;
+  }
+
+  function applyAutoHandicaps(){
+    const names = state.players.map(p=>p.name).filter(n=>n.trim());
+    if(!names.length) return;
+    const computed = computeAutoHandicaps(names);
+    state.players.forEach((p,idx)=>{
+      if(computed[p.name] !== undefined){
+        p.handicap = computed[p.name];
+        const hcInput = document.querySelector(`[data-hcidx="${idx}"]`);
+        if(hcInput) hcInput.value = p.handicap;
+      }
+    });
   }
 
   function renderSetup(){
@@ -1056,6 +1072,57 @@
     `;
   }
 
+  function renderHistory(){
+    const history = loadHistory();
+    const averages = getPlayerAverages();
+
+    const statsRows = Object.keys(averages).length ? `
+      <div class="card">
+        <div class="eyebrow" style="margin-bottom:8px;">Promedio histórico por jugador</div>
+        ${Object.keys(averages).sort((a,b)=>averages[a]-averages[b]).map(key=>{
+          const round = history.find(r=>r.players.some(p=>p.name.trim().toLowerCase()===key));
+          const displayName = round ? round.players.find(p=>p.name.trim().toLowerCase()===key).name : key;
+          const avg = averages[key];
+          return `<div class="sb-row">
+            <div class="sb-name">${displayName}</div>
+            <div class="mono" style="color:var(--text-dim);">${avg>0?'+':''}${avg.toFixed(1)}</div>
+          </div>`;
+        }).join("")}
+      </div>` : "";
+
+    const roundsHtml = history.length ? history.map(r=>{
+      const date = new Date(r.date);
+      const dateStr = date.toLocaleDateString("es-MX", {day:"numeric", month:"short", year:"numeric"});
+      const sorted = r.players.slice().sort((a,b)=>a.total-b.total);
+      const modeTag = r.modes.chaosCup ? "🏆 Chaos Cup" : (r.modes.skins ? "🃏 Skins" : "");
+      return `
+        <div class="card">
+          <div class="eyebrow" style="display:flex;justify-content:space-between;">
+            <span>${dateStr}${r.course ? " · "+r.course : ""}</span>
+            <span>${modeTag}</span>
+          </div>
+          <div style="font-weight:700;font-size:14px;margin:6px 0 8px;">🏆 ${r.winnerName}</div>
+          ${sorted.map((p,i)=>`<div class="sb-row">
+            <div class="sb-name"><span class="sb-rank">${i+1}</span>${p.name}</div>
+            <div class="mono">${p.total>0?'+':''}${p.total}</div>
+          </div>`).join("")}
+        </div>`;
+    }).join("") : `<p class="center-note">Todavía no hay rondas completas guardadas. Termina una ronda de 18 hoyos para que aparezca aquí.</p>`;
+
+    return `
+      <div class="screen">
+        <div class="eyebrow">Solo en este celular</div>
+        <h1 class="title">📜 Historial de rondas</h1>
+        <p class="sub">Últimas ${history.length} ronda${history.length===1?'':'s'} guardadas. Con esto se calculan los handicaps automáticos de Chaos Cup.</p>
+        ${statsRows}
+        ${roundsHtml}
+      </div>
+      <footer class="bottombar">
+        <button class="btn-primary" id="backFromHistory">Regresar</button>
+      </footer>
+    `;
+  }
+
   function renderSettings(){
     const returnScreen = state.settingsReturnScreen || "setup";
     const hasRound = !["setup","finalBoard"].includes(returnScreen);
@@ -1080,6 +1147,11 @@
         <button class="settings-row" id="settingsOpenManual">
           <div class="settings-icon">📖</div>
           <div style="flex:1;text-align:left;" class="settings-row-title">Manual rápido</div>
+          <div class="settings-chevron">›</div>
+        </button>
+        <button class="settings-row" id="settingsOpenHistory">
+          <div class="settings-icon">📜</div>
+          <div style="flex:1;text-align:left;" class="settings-row-title">Historial de rondas</div>
           <div class="settings-chevron">›</div>
         </button>
 
@@ -1412,14 +1484,7 @@
         state.players[idx].name = e.target.value;
         const btn = document.getElementById("toPars");
         if(btn) btn.disabled = state.players.filter(p=>p.name.trim()).length < 2;
-        if(state.chaosCupMode){
-          const found = lookupChaosCupHandicap(e.target.value);
-          if(found !== null){
-            state.players[idx].handicap = found;
-            const hcInput = document.querySelector(`[data-hcidx="${idx}"]`);
-            if(hcInput) hcInput.value = found;
-          }
-        }
+        if(state.chaosCupMode) applyAutoHandicaps();
       });
     });
     document.querySelectorAll("[data-hcidx]").forEach(inp=>{
@@ -1451,12 +1516,7 @@
     const toggleChaosCupMode = document.getElementById("toggleChaosCupMode");
     if(toggleChaosCupMode) toggleChaosCupMode.addEventListener("click", ()=>{
       state.chaosCupMode = !state.chaosCupMode;
-      if(state.chaosCupMode){
-        state.players.forEach(p=>{
-          const found = lookupChaosCupHandicap(p.name);
-          if(found !== null) p.handicap = found;
-        });
-      }
+      if(state.chaosCupMode) applyAutoHandicaps();
       render();
     });
 
@@ -1545,6 +1605,24 @@
 
     const toFinal = document.getElementById("toFinal");
     if(toFinal) toFinal.addEventListener("click", ()=>{
+      if(!state.historySaved){
+        let winnerName;
+        if(state.chaosCupMode){
+          winnerName = state.players.slice().sort((a,b)=>(a.total-a.handicap)-(b.total-b.handicap))[0].name;
+        } else if(state.skinsMode){
+          winnerName = state.players.slice().sort((a,b)=>b.skins-a.skins)[0].name;
+        } else {
+          winnerName = state.players.slice().sort((a,b)=>a.total-b.total)[0].name;
+        }
+        saveRoundToHistory({
+          date: new Date().toISOString(),
+          course: state.courseInfo ? state.courseInfo.name : null,
+          modes: {chaosCup: state.chaosCupMode, skins: state.skinsMode},
+          winnerName,
+          players: state.players.map(p=>({name:p.name, total:p.total, handicap:p.handicap||0, skins:p.skins||0})),
+        });
+        state.historySaved = true;
+      }
       state.screen = "finalBoard";
       render();
     });
@@ -1605,6 +1683,19 @@
     if(settingsOpenManual) settingsOpenManual.addEventListener("click", ()=>{
       state.manualReturnScreen = "settings";
       state.screen = "manual";
+      render();
+    });
+
+    const settingsOpenHistory = document.getElementById("settingsOpenHistory");
+    if(settingsOpenHistory) settingsOpenHistory.addEventListener("click", ()=>{
+      state.historyReturnScreen = "settings";
+      state.screen = "history";
+      render();
+    });
+
+    const backFromHistory = document.getElementById("backFromHistory");
+    if(backFromHistory) backFromHistory.addEventListener("click", ()=>{
+      state.screen = state.historyReturnScreen || "settings";
       render();
     });
 
@@ -1677,7 +1768,7 @@
       finalBlockDone:{front:false, back:false},
       skinsMode:false, chaosCupMode:false, skinsInitialized:false, deck:[], discard:[], skinPool:1,
       holeDoubleBy:null, pressionActive:false, lastPlayedCard:null,
-      cardsPlayedThisHole:[], cardTargetsHitThisHole:[], history:[], courseInfo:null, trajectoryOpen:false, manualReturnScreen:null, settingsReturnScreen:null,
+      cardsPlayedThisHole:[], cardTargetsHitThisHole:[], history:[], courseInfo:null, trajectoryOpen:false, manualReturnScreen:null, settingsReturnScreen:null, historyReturnScreen:null, historySaved:false,
     };
   }
 
