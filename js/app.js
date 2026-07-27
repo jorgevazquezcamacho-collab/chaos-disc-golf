@@ -79,6 +79,7 @@
     lastPlayedCard: null,     // {cardId, byPlayerId} — para Carta Espejo
     cardsPlayedThisHole: [],  // playerIds que ya jugaron carta este hoyo
     cardTargetsHitThisHole: [], // playerIds que ya recibieron una carta en contra este hoyo
+    history: [], // snapshots para poder deshacer el último hoyo
   };
 
   function uid(){ return Math.random().toString(36).slice(2,9); }
@@ -165,6 +166,9 @@
   }
 
   function saveHoleAndProcess(){
+    // Snapshot del estado ANTES de tocar nada, para poder deshacer este hoyo después.
+    snapshotForUndo();
+
     const bs = state.blockState;
     const holeNum = currentHoleNumber();
     const pos = currentPosition();
@@ -498,12 +502,14 @@
     const frontActive = state.block === "front";
     const backActive = state.block === "back";
     const showReset = !["setup","finalBoard"].includes(state.screen);
+    const showUndo = showReset && state.history && state.history.length > 0;
     return `
     <header class="topbar">
       <div class="brand"><span style="color:var(--text);">CHAOS</span> <span style="color:var(--lime);">DISC</span><span style="display:inline-flex;margin:0 -1px;">${basketLogo()}</span><span style="color:var(--lime);">GOLF</span></div>
       <div style="display:flex;gap:6px;align-items:center;">
         <div class="block-pill ${frontActive?'active':''}">FRONT 9</div>
         <div class="block-pill ${backActive?'active':''}">BACK 9</div>
+        ${showUndo ? `<button id="undoHoleBtn" class="reset-btn" title="Deshacer último hoyo">↩</button>` : ""}
         ${showReset ? `<button id="resetRoundBtn" class="reset-btn" title="Reiniciar ronda">↺</button>` : ""}
       </div>
     </header>`;
@@ -1189,11 +1195,33 @@
     if(resetRoundBtn) resetRoundBtn.addEventListener("click", ()=>{
       showResetConfirm();
     });
+
+    const undoHoleBtn = document.getElementById("undoHoleBtn");
+    if(undoHoleBtn) undoHoleBtn.addEventListener("click", ()=>{
+      undoLastHole();
+    });
   }
 
   function resetToNewRound(){
     clearSavedState();
     state = freshDefaultState();
+    render();
+  }
+
+  function snapshotForUndo(){
+    // clona el estado actual (sin el propio historial, para no anidar snapshots)
+    const clone = JSON.parse(JSON.stringify({...state, history: undefined}));
+    if(!Array.isArray(state.history)) state.history = [];
+    state.history.push(clone);
+    if(state.history.length > 20) state.history.shift(); // tope de seguridad, 18 hoyos caben de sobra
+  }
+
+  function undoLastHole(){
+    if(!state.history || state.history.length === 0) return;
+    const prevHistory = state.history;
+    const restored = prevHistory.pop();
+    restored.history = prevHistory;
+    state = restored;
     render();
   }
 
@@ -1231,7 +1259,7 @@
       finalBlockDone:{front:false, back:false},
       skinsMode:false, skinsInitialized:false, deck:[], discard:[], skinPool:1,
       holeDoubleBy:null, pressionActive:false, lastPlayedCard:null,
-      cardsPlayedThisHole:[], cardTargetsHitThisHole:[],
+      cardsPlayedThisHole:[], cardTargetsHitThisHole:[], history:[],
     };
   }
 
